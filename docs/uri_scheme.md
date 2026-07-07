@@ -30,6 +30,13 @@ anytls://[auth@]hostname[:port]/?[key=value]&[key=value]...
 
 - `insecure`：是否允许不安全的 TLS 连接。接受 `1` 表示 `true`，`0` 表示 `false`。
 
+### 片段 (Fragment)
+
+URI 中 `?` 参数列表之后的 `#` 部分称为片段（Fragment）。在 AnyTLS 中，**片段用于指定节点的显示名称**。
+- 片段内容必须使用 [URL 编码（百分号编码）](https://datatracker.ietf.org/doc/html/rfc3986#section-2.1) 处理，以确保空格和特殊字符能被正确解析与传输。
+- 客户端在解析 URI 时，应对片段进行 URL 解码以获取可读的节点名称/标签。
+- 示例：`#my%20tag%20with%20spaces` 解码后为 `my tag with spaces`。
+
 ## 示例
 
 ```
