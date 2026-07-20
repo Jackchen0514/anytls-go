@@ -3,7 +3,7 @@ package main
 import (
 	"anytls/proxy/padding"
 	"anytls/proxy/session"
-	"bytes"
+	"anytls/user"
 	"context"
 	"crypto/tls"
 	"encoding/binary"
@@ -38,7 +38,15 @@ func handleTcpConnection(ctx context.Context, c net.Conn, s *myServer) {
 	c = bufio.NewCachedConn(c, b)
 
 	by, err := b.ReadBytes(32)
-	if err != nil || !bytes.Equal(by, passwordSha256) {
+	if err != nil {
+		b.Resize(0, n)
+		fallback(ctx, c)
+		return
+	}
+	var hash [32]byte
+	copy(hash[:], by)
+	userState, ok := s.userManager.LookupByPasswordHash(hash)
+	if !ok {
 		b.Resize(0, n)
 		fallback(ctx, c)
 		return
@@ -59,7 +67,22 @@ func handleTcpConnection(ctx context.Context, c net.Conn, s *myServer) {
 		}
 	}
 
-	session := session.NewServerSession(c, func(stream *session.Stream) {
+	if userState.IsOverTraffic() {
+		logrus.Debugln("user over traffic quota, rejecting:", userState.Username())
+		return
+	}
+
+	remoteIP, _, err := net.SplitHostPort(c.RemoteAddr().String())
+	if err != nil {
+		remoteIP = c.RemoteAddr().String()
+	}
+	if !userState.AcquireIP(remoteIP) {
+		logrus.Debugln("user IP limit exceeded, rejecting:", userState.Username(), remoteIP)
+		return
+	}
+	defer userState.ReleaseIP(remoteIP)
+
+	sess := session.NewServerSession(c, func(stream *session.Stream) {
 		defer func() {
 			if r := recover(); r != nil {
 				logrus.Errorln("[BUG]", r, string(debug.Stack()))
@@ -67,20 +90,56 @@ func handleTcpConnection(ctx context.Context, c net.Conn, s *myServer) {
 		}()
 		defer stream.Close()
 
+		if userState.IsOverTraffic() {
+			logrus.Debugln("user over traffic quota, closing stream:", userState.Username())
+			return
+		}
+		if !userState.AcquireConn() {
+			logrus.Debugln("user connection limit exceeded:", userState.Username())
+			return
+		}
+		defer userState.ReleaseConn()
+
 		destination, err := M.SocksaddrSerializer.ReadAddrPort(stream)
 		if err != nil {
 			logrus.Debugln("ReadAddrPort:", err)
 			return
 		}
 
+		conn := &countingConn{Stream: stream, state: userState}
+
 		if strings.Contains(destination.String(), "udp-over-tcp.arpa") {
-			proxyOutboundUoT(ctx, stream, destination)
+			proxyOutboundUoT(ctx, conn, destination)
 		} else {
-			proxyOutboundTCP(ctx, stream, destination)
+			proxyOutboundTCP(ctx, conn, destination)
 		}
 	}, &padding.DefaultPaddingFactory)
-	session.Run()
-	session.Close()
+	sess.Run()
+	sess.Close()
+}
+
+// countingConn wraps a proxy Stream to account transferred bytes against a
+// user's traffic quota, closing the stream once the quota is exceeded. Newly
+// opened streams and sessions are rejected once the quota check fails.
+type countingConn struct {
+	*session.Stream
+	state *user.State
+}
+
+func (c *countingConn) Read(b []byte) (int, error) {
+	n, err := c.Stream.Read(b)
+	if n > 0 && c.state.AddTraffic(int64(n)) {
+		c.Stream.Close()
+	}
+	return n, err
+}
+
+func (c *countingConn) Write(b []byte) (int, error) {
+	n, err := c.Stream.Write(b)
+	if n > 0 && c.state.AddTraffic(int64(n)) {
+		c.Stream.Close()
+	}
+	return n, err
 }
 
 func fallback(ctx context.Context, c net.Conn) {

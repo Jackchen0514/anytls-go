@@ -28,6 +28,60 @@
 
 `0.0.0.0:8443` 为服务器监听的地址和端口。
 
+### 一键安装（systemd）
+
+在已 clone 的源码目录下（脚本本身不会下载源码，需本机已具备 Go >= 1.24 工具链用于编译）：
+
+```
+sudo bash install.sh                                  # 随机生成密码与管理 API Key
+sudo bash install.sh -p 自定义密码 --api-key 自定义Key   # 指定密码/Key
+sudo bash install.sh --no-api                          # 不启用管理 API
+```
+
+脚本会编译并安装 `anytls-server` / `anytls-client` 到 `/usr/local/bin`，创建独立系统用户运行服务，写入并启用 `anytls-server` systemd 服务，密码/API Key 会保存在 `/etc/anytls/credentials.env`（重复运行 `install.sh` 不会更换已生成的密码/Key）。
+
+升级到最新代码并重新编译部署：
+
+```
+sudo bash update.sh          # git pull 最新代码后重新编译、重启服务
+sudo bash update.sh --no-pull   # 跳过 git pull，仅用当前代码重新编译、重启服务
+```
+
+卸载：
+
+```
+sudo bash uninstall.sh          # 卸载服务与二进制，保留用户数据库与凭据
+sudo bash uninstall.sh --purge  # 同时清除用户数据库、凭据与系统用户
+```
+
+### 多用户与管理 API
+
+示例服务器内置了基于 SQLite 的多用户支持：每个用户拥有独立密码，并可分别限制流量、IP 数与连接数。
+
+```
+./anytls-server -l 0.0.0.0:8443 -p 密码 -db anytls.db -api-listen 127.0.0.1:8080 -api-key API密钥
+```
+
+- `-p` 仅在用户数据库为空时用于引导一个不限量的 `default` 用户，之后应通过管理 API 创建/管理用户。
+- `-db` 用户数据库文件路径（默认 `anytls.db`）。
+- `-api-listen` 管理 API 监听地址，留空则不启动管理 API。
+- `-api-key` 管理 API 所需的静态密钥（`Authorization: Bearer <key>`），启用 `-api-listen` 时必填。
+
+启用 `-api-listen` 后，访问 `http://<api-listen>/`（如 `http://127.0.0.1:8080/`）即可打开内置的简易管理网页。首次访问会显示登录页，输入 API Key 校验通过后才能看到用户列表；登录状态保存在浏览器本地，可随时点击「退出登录」清除。登录后可创建/编辑/删除用户，查看实时流量与 IP/连接数用量，并手动重置流量。该页面外壳本身无需鉴权即可加载，登录态验证与之后的所有数据请求都由浏览器带着你输入的 Key 向 `-api-key` 校验，故仍应只在受信网络中开放此端口，或用反向代理加一层访问控制。
+
+用户超出流量/IP 数/连接数限制后，服务器会拒绝其新建的流/连接（已限流的用户的存量会话中，新的代理流也会被立即拒绝）。
+
+管理 API（JSON）：
+
+| 方法与路径 | 说明 |
+|--|--|
+| `GET /api/users` | 列出所有用户及其实时用量 |
+| `POST /api/users` | 创建用户，字段：`username`、`password`（必填），`enabled`、`traffic_limit_bytes`、`ip_limit`、`conn_limit`、`traffic_reset_cycle`(`none`/`daily`/`monthly`)（可选） |
+| `GET /api/users/{id}` | 查询单个用户及用量 |
+| `PUT /api/users/{id}` | 部分更新用户字段 |
+| `DELETE /api/users/{id}` | 删除用户 |
+| `POST /api/users/{id}/reset-traffic` | 手动重置该用户已用流量 |
+
 ### 示例客户端
 
 ```

@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AnyTLS 用户管理</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --border: #e2e4e9;
+    --text: #1c1f26;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --accent-hover: #1d4ed8;
+    --danger: #dc2626;
+    --danger-hover: #b91c1c;
+    --ok: #16a34a;
+    --warn: #d97706;
+    --track: #e5e7eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --panel: #1c1f26;
+      --border: #2c3038;
+      --text: #e6e8eb;
+      --muted: #9aa1ac;
+      --accent: #3b82f6;
+      --accent-hover: #60a5fa;
+      --danger: #f87171;
+      --danger-hover: #fca5a5;
+      --ok: #4ade80;
+      --warn: #fbbf24;
+      --track: #2c3038;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 24px 20px 60px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+  h1 { font-size: 20px; margin: 0; }
+  input, select {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-size: 13px;
+  }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button {
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 7px 14px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  button.danger { color: var(--danger); }
+  button.danger:hover { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+  button.small { padding: 4px 9px; font-size: 12px; }
+  .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 8px; flex-wrap: wrap; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+  tr:last-child td { border-bottom: none; }
+  td.actions { white-space: nowrap; text-align: right; }
+  td.actions button { margin-left: 6px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .badge.on { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+  .badge.off { background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger); }
+  .meter { width: 130px; }
+  .meter .bar { height: 6px; border-radius: 999px; background: var(--track); overflow: hidden; margin-bottom: 4px; }
+  .meter .fill { height: 100%; background: var(--accent); }
+  .meter .fill.warn { background: var(--warn); }
+  .meter .fill.over { background: var(--danger); }
+  .meter .label { font-size: 11px; color: var(--muted); }
+  .muted { color: var(--muted); }
+  .empty { padding: 40px; text-align: center; color: var(--muted); }
+  dialog {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 0;
+    background: var(--panel);
+    color: var(--text);
+    width: min(420px, 92vw);
+  }
+  dialog::backdrop { background: rgba(0,0,0,.4); }
+  .dialog-inner { padding: 20px; }
+  .dialog-inner h2 { margin: 0 0 16px; font-size: 16px; }
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .field input, .field select { width: 100%; }
+  .field-row { display: flex; gap: 10px; }
+  .field-row .field { flex: 1; }
+  .check-field { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .check-field input { width: auto; }
+  .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  .hint { font-size: 11px; color: var(--muted); margin-top: -6px; margin-bottom: 12px; }
+  #toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--text); color: var(--bg);
+    padding: 9px 16px; border-radius: 8px; font-size: 13px;
+    opacity: 0; pointer-events: none; transition: opacity .2s;
+    max-width: 90vw; white-space: pre-wrap;
+  }
+  #toast.show { opacity: 1; }
+  #toast.err { background: var(--danger); color: #fff; }
+
+  #loginScreen {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .login-card {
+    width: min(340px, 100%);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px 26px;
+  }
+  .login-card h1 { font-size: 18px; margin: 0 0 4px; }
+  .login-card p.sub { margin: 0 0 20px; font-size: 13px; color: var(--muted); }
+  .login-card .field { margin-bottom: 14px; }
+  .login-card button[type=submit] { width: 100%; padding: 9px 0; font-size: 14px; }
+  .login-error { color: var(--danger); font-size: 12px; min-height: 16px; margin: -4px 0 12px; }
+</style>
+</head>
+<body>
+
+<div id="loginScreen" style="display:none;">
+  <form class="login-card" id="loginForm">
+    <h1>AnyTLS 用户管理</h1>
+    <p class="sub">请输入管理 API Key 登录</p>
+    <div class="field">
+      <input id="loginKey" type="password" placeholder="管理 API Key" autocomplete="current-password" required>
+    </div>
+    <div class="login-error" id="loginError"></div>
+    <button type="submit" class="primary" id="loginBtn">登录</button>
+  </form>
+</div>
+
+<div id="app" class="wrap" style="display:none;">
+  <header>
+    <h1>AnyTLS 用户管理</h1>
+    <button id="logoutBtn">退出登录</button>
+  </header>
+
+  <div class="toolbar">
+    <button class="primary" id="newUserBtn">+ 新建用户</button>
+    <button id="refreshBtn">刷新</button>
+  </div>
+
+  <div class="panel">
+    <table>
+      <thead>
+        <tr>
+          <th>用户名</th>
+          <th>状态</th>
+          <th>流量</th>
+          <th>IP</th>
+          <th>连接</th>
+          <th>重置周期</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="empty" id="emptyState" style="display:none;">暂无用户</div>
+  </div>
+</div>
+
+<dialog id="dialog">
+  <form method="dialog" class="dialog-inner" id="form">
+    <h2 id="dialogTitle">新建用户</h2>
+    <input type="hidden" id="f_id">
+    <div class="field">
+      <label>用户名</label>
+      <input id="f_username" required autocomplete="off">
+    </div>
+    <div class="field">
+      <label id="f_password_label">密码</label>
+      <input id="f_password" autocomplete="off">
+    </div>
+    <p class="hint" id="f_password_hint">连接密码，第三方客户端使用此密码接入</p>
+    <div class="check-field">
+      <input type="checkbox" id="f_enabled" checked>
+      <label for="f_enabled" style="margin:0;">启用</label>
+    </div>
+    <div class="field">
+      <label>流量限制 (GB，0 = 不限)</label>
+      <input id="f_traffic" type="number" min="0" step="0.1" value="0">
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>IP 数限制 (0 = 不限)</label>
+        <input id="f_ip" type="number" min="0" step="1" value="0">
+      </div>
+      <div class="field">
+        <label>连接数限制 (0 = 不限)</label>
+        <input id="f_conn" type="number" min="0" step="1" value="0">
+      </div>
+    </div>
+    <div class="field">
+      <label>流量重置周期</label>
+      <select id="f_reset">
+        <option value="none">不重置</option>
+        <option value="daily">每天</option>
+        <option value="monthly">每月</option>
+      </select>
+    </div>
+    <div class="dialog-actions">
+      <button type="button" id="cancelBtn">取消</button>
+      <button type="submit" class="primary" id="submitBtn">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const dialog = $('dialog');
+const GB = 1024 ** 3;
+
+function getKey() { return localStorage.getItem('anytls_api_key') || ''; }
+function setKey(k) { localStorage.setItem('anytls_api_key', k); }
+function clearKey() { localStorage.removeItem('anytls_api_key'); }
+
+let toastTimer;
+function toast(msg, isErr) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.className = isErr ? 'show err' : 'show';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.className = '', 2500);
+}
+
+async function api(path, opts) {
+  opts = opts || {};
+  const headers = Object.assign({'Content-Type': 'application/json'}, opts.headers || {});
+  headers['Authorization'] = 'Bearer ' + getKey();
+  const res = await fetch(path, Object.assign({}, opts, {headers}));
+  if (res.status === 401) {
+    logout('登录已失效，请重新输入 API Key');
+    throw new Error('unauthorized');
+  }
+  let body = null;
+  const text = await res.text();
+  if (text) { try { body = JSON.parse(text); } catch (e) {} }
+  if (!res.ok) {
+    const msg = (body && body.error) ? body.error : ('HTTP ' + res.status);
+    throw new Error(msg);
+  }
+  return body;
+}
+
+function fmtBytes(n) {
+  if (!n || n <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return v.toFixed(v >= 100 || i === 0 ? 0 : 1) + ' ' + units[i];
+}
+
+function meter(used, limit) {
+  if (!limit || limit <= 0) {
+    return `<div class="meter"><div class="label">${fmtBytes(used)} / 不限</div></div>`;
+  }
+  const pct = Math.min(100, (used / limit) * 100);
+  const cls = pct >= 100 ? 'over' : (pct >= 80 ? 'warn' : '');
+  return `<div class="meter">
+    <div class="bar"><div class="fill ${cls}" style="width:${pct}%"></div></div>
+    <div class="label">${fmtBytes(used)} / ${fmtBytes(limit)}</div>
+  </div>`;
+}
+
+function countLabel(active, limit) {
+  return limit > 0 ? `${active} / ${limit}` : `${active} / 不限`;
+}
+
+let users = [];
+
+async function loadUsers() {
+  if (!getKey()) {
+    users = [];
+    render();
+    return;
+  }
+  try {
+    users = await api('/api/users');
+    render();
+  } catch (e) {
+    users = [];
+    render();
+    if (e.message !== 'unauthorized') toast('加载用户失败: ' + e.message, true);
+  }
+}
+
+function render() {
+  const rows = $('rows');
+  rows.innerHTML = '';
+  $('emptyState').style.display = users.length ? 'none' : 'block';
+  for (const u of users) {
+    const usage = u.usage || {};
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><strong>${escapeHtml(u.username)}</strong></td>
+      <td><span class="badge ${u.enabled ? 'on' : 'off'}">${u.enabled ? '启用' : '禁用'}</span></td>
+      <td>${meter(usage.traffic_used_bytes || 0, u.traffic_limit_bytes || 0)}</td>
+      <td>${countLabel(usage.active_ips || 0, u.ip_limit || 0)}</td>
+      <td>${countLabel(usage.active_conns || 0, u.conn_limit || 0)}</td>
+      <td class="muted">${resetLabel(u.traffic_reset_cycle)}</td>
+      <td class="actions">
+        <button class="small" data-act="edit">编辑</button>
+        <button class="small" data-act="reset">重置流量</button>
+        <button class="small danger" data-act="delete">删除</button>
+      </td>`;
+    tr.querySelector('[data-act=edit]').onclick = () => openEdit(u);
+    tr.querySelector('[data-act=reset]').onclick = () => resetTraffic(u);
+    tr.querySelector('[data-act=delete]').onclick = () => deleteUser(u);
+    rows.appendChild(tr);
+  }
+}
+
+function resetLabel(c) {
+  return {none: '不重置', daily: '每天', monthly: '每月'}[c] || c || '不重置';
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function openCreate() {
+  $('dialogTitle').textContent = '新建用户';
+  $('f_id').value = '';
+  $('f_username').value = '';
+  $('f_username').disabled = false;
+  $('f_password').value = '';
+  $('f_password').placeholder = '';
+  $('f_password_hint').textContent = '连接密码，第三方客户端使用此密码接入';
+  $('f_enabled').checked = true;
+  $('f_traffic').value = 0;
+  $('f_ip').value = 0;
+  $('f_conn').value = 0;
+  $('f_reset').value = 'none';
+  dialog.showModal();
+}
+
+function openEdit(u) {
+  $('dialogTitle').textContent = '编辑用户: ' + u.username;
+  $('f_id').value = u.id;
+  $('f_username').value = u.username;
+  $('f_username').disabled = false;
+  $('f_password').value = '';
+  $('f_password').placeholder = u.password;
+  $('f_password_hint').textContent = '留空则不修改密码';
+  $('f_enabled').checked = !!u.enabled;
+  $('f_traffic').value = u.traffic_limit_bytes ? +(u.traffic_limit_bytes / GB).toFixed(3) : 0;
+  $('f_ip').value = u.ip_limit || 0;
+  $('f_conn').value = u.conn_limit || 0;
+  $('f_reset').value = u.traffic_reset_cycle || 'none';
+  dialog.showModal();
+}
+
+$('newUserBtn').onclick = openCreate;
+$('cancelBtn').onclick = () => dialog.close();
+$('refreshBtn').onclick = loadUsers;
+
+$('form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const id = $('f_id').value;
+  const payload = {
+    username: $('f_username').value.trim(),
+    enabled: $('f_enabled').checked,
+    traffic_limit_bytes: Math.round(parseFloat($('f_traffic').value || 0) * GB),
+    ip_limit: parseInt($('f_ip').value || 0, 10),
+    conn_limit: parseInt($('f_conn').value || 0, 10),
+    traffic_reset_cycle: $('f_reset').value,
+  };
+  const pw = $('f_password').value;
+  if (pw || !id) payload.password = pw;
+
+  try {
+    if (id) {
+      await api('/api/users/' + id, {method: 'PUT', body: JSON.stringify(payload)});
+      toast('已保存');
+    } else {
+      if (!payload.password) { toast('新建用户需要设置密码', true); return; }
+      await api('/api/users', {method: 'POST', body: JSON.stringify(payload)});
+      toast('已创建');
+    }
+    dialog.close();
+    loadUsers();
+  } catch (e) {
+    if (e.message !== 'unauthorized') toast('保存失败: ' + e.message, true);
+  }
+});
+
+async function resetTraffic(u) {
+  if (!confirm(`确定重置用户 "${u.username}" 的已用流量吗？`)) return;
+  try {
+    await api('/api/users/' + u.id + '/reset-traffic', {method: 'POST'});
+    toast('已重置');
+    loadUsers();
+  } catch (e) {
+    if (e.message !== 'unauthorized') toast('重置失败: ' + e.message, true);
+  }
+}
+
+async function deleteUser(u) {
+  if (!confirm(`确定删除用户 "${u.username}" 吗？此操作不可撤销。`)) return;
+  try {
+    await api('/api/users/' + u.id, {method: 'DELETE'});
+    toast('已删除');
+    loadUsers();
+  } catch (e) {
+    if (e.message !== 'unauthorized') toast('删除失败: ' + e.message, true);
+  }
+}
+
+// --- Login / logout ---
+
+let pollTimer = null;
+
+function showLogin(msg) {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  $('app').style.display = 'none';
+  $('loginScreen').style.display = 'flex';
+  $('loginError').textContent = msg || '';
+  $('loginKey').value = '';
+  $('loginBtn').disabled = false;
+  setTimeout(() => $('loginKey').focus(), 0);
+}
+
+function showApp() {
+  $('loginScreen').style.display = 'none';
+  $('app').style.display = 'block';
+  if (!pollTimer) {
+    pollTimer = setInterval(() => { if (!dialog.open) loadUsers(); }, 5000);
+  }
+}
+
+function logout(msg) {
+  clearKey();
+  users = [];
+  render();
+  showLogin(msg);
+}
+
+async function verifyKey(key) {
+  const res = await fetch('/api/users', { headers: { Authorization: 'Bearer ' + key } });
+  if (res.ok) return true;
+  if (res.status === 401) return false;
+  throw new Error('HTTP ' + res.status);
+}
+
+$('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const key = $('loginKey').value.trim();
+  if (!key) return;
+  $('loginBtn').disabled = true;
+  $('loginError').textContent = '';
+  try {
+    const ok = await verifyKey(key);
+    if (ok) {
+      setKey(key);
+      showApp();
+      loadUsers();
+    } else {
+      $('loginError').textContent = 'API Key 不正确';
+      $('loginBtn').disabled = false;
+    }
+  } catch (err) {
+    $('loginError').textContent = '连接服务器失败: ' + err.message;
+    $('loginBtn').disabled = false;
+  }
+});
+
+$('logoutBtn').onclick = () => logout();
+
+async function boot() {
+  const key = getKey();
+  if (!key) { showLogin(); return; }
+  try {
+    const ok = await verifyKey(key);
+    if (ok) { showApp(); loadUsers(); }
+    else { logout('登录已失效，请重新输入 API Key'); }
+  } catch (err) {
+    showLogin('连接服务器失败: ' + err.message);
+  }
+}
+
+boot();
+</script>
+</body>
+</html>
