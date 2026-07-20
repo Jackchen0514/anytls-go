@@ -24,6 +24,7 @@ func main() {
 	password := flag.String("p", "", "Password")
 	minIdleSession := flag.Int("m", 5, "Reserved min idle session")
 	disableReuse := flag.Bool("dr", false, "Disable client session reuse")
+	insecure := flag.Bool("insecure", false, "Disable TLS certificate verification (required for the server's default self-signed certificate)")
 	flag.Parse()
 
 	if serverURL, err := url.Parse(*serverAddr); err == nil {
@@ -66,14 +67,19 @@ func main() {
 		logrus.Fatalln("listen socks5 tcp:", err)
 	}
 
-	// You can only use `InsecureSkipVerify` by default in the sample client; it is not recommended for use in production code.
 	tlsConfig := &tls.Config{
 		ServerName:         *sni,
-		InsecureSkipVerify: true,
+		InsecureSkipVerify: *insecure,
 	}
 	if tlsConfig.ServerName == "" {
-		// disable the SNI
-		tlsConfig.ServerName = "127.0.0.1"
+		if h, _, err := net.SplitHostPort(*serverAddr); err == nil && h != "" {
+			tlsConfig.ServerName = h
+		} else {
+			tlsConfig.ServerName = "127.0.0.1"
+		}
+	}
+	if *insecure {
+		logrus.Warnln("[Client] TLS certificate verification is DISABLED (-insecure); only use this if you trust the network path to the server.")
 	}
 
 	path := strings.TrimSpace(os.Getenv("TLS_KEY_LOG"))

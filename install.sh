@@ -14,15 +14,24 @@
 #       --api-key KEY        admin API key (default: random, generated once)
 #       --no-api             disable the admin API entirely
 #       --version TAG         release tag to install (default: latest)
+#       --domain DOMAIN       issue a real Let's Encrypt certificate for this
+#                             domain via DNS-01 (requires --cloudflare-token);
+#                             without this, the server uses a generated
+#                             self-signed certificate (clients need -insecure)
+#       --cloudflare-token T  Cloudflare API token with Zone:DNS:Edit on the
+#                             zone for --domain (required together with it)
 #   -h, --help               show this help
 #
 # Re-running this script (e.g. with a newer --version) redeploys the binaries
 # without rotating an already-generated password/API key, unless you pass
-# -p/--password or --api-key explicitly.
+# -p/--password or --api-key explicitly. Re-running with the same --domain is
+# also safe: acme.sh only re-issues when the existing cert is close to expiry.
 #
-# Requires network access to github.com to download the release archive.
-# There is no fallback to a local build - if that's not an option for you,
-# clone the repo and run `go build ./cmd/server` / `./cmd/client` yourself.
+# Requires network access to github.com to download the release archive
+# (and, with --domain, to also fetch acme.sh, and to reach the Cloudflare
+# API and Let's Encrypt to issue a certificate). There is no fallback to a
+# local build - if downloading the release isn't an option for you, clone
+# the repo and run `go build ./cmd/server` / `./cmd/client` yourself.
 set -euo pipefail
 
 REPO="Jackchen0514/anytls-go"
@@ -41,8 +50,10 @@ API_LISTEN="127.0.0.1:8843"
 API_KEY=""
 ENABLE_API=1
 VERSION="latest"
+DOMAIN=""
+CF_TOKEN=""
 
-usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -53,6 +64,8 @@ while [[ $# -gt 0 ]]; do
     --api-key) API_KEY="$2"; shift 2 ;;
     --no-api) ENABLE_API=0; shift ;;
     --version) VERSION="$2"; shift 2 ;;
+    --domain) DOMAIN="$2"; shift 2 ;;
+    --cloudflare-token) CF_TOKEN="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "未知参数: $1" >&2; usage; exit 1 ;;
   esac
@@ -63,7 +76,18 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-for tool in curl tar sha256sum; do
+if [[ -n "$DOMAIN" && -z "$CF_TOKEN" ]]; then
+  echo "使用 --domain 签发证书时必须同时提供 --cloudflare-token" >&2
+  exit 1
+fi
+if [[ -z "$DOMAIN" && -n "$CF_TOKEN" ]]; then
+  echo "提供了 --cloudflare-token 但未指定 --domain" >&2
+  exit 1
+fi
+
+REQUIRED_TOOLS=(curl tar sha256sum)
+[[ -n "$DOMAIN" ]] && REQUIRED_TOOLS+=(openssl)
+for tool in "${REQUIRED_TOOLS[@]}"; do
   command -v "$tool" >/dev/null 2>&1 || { echo "需要 $tool，请先安装后重试" >&2; exit 1; }
 done
 
@@ -167,7 +191,54 @@ umask 077
 chown root:root "$CRED_FILE"
 chmod 600 "$CRED_FILE"
 
-EXEC_START="$BIN_DIR/anytls-server -l $LISTEN -p $PASSWORD -db $DB_PATH"
+CERT_ARGS=""
+if [[ -n "$DOMAIN" ]]; then
+  ACME_HOME="$CONF_DIR/acme.sh"
+  TLS_DIR="$CONF_DIR/tls"
+  mkdir -p "$TLS_DIR"
+
+  if [[ ! -x "$ACME_HOME/acme.sh" ]]; then
+    echo "==> 安装 acme.sh (用于向 Let's Encrypt 申请证书)"
+    ACME_INSTALLER_DIR="$(mktemp -d)"
+    # Fetch the acme.sh script itself and run its --install directly, rather
+    # than piping through the get.acme.sh convenience wrapper: that wrapper
+    # treats its first positional argument as an `email=...` shorthand, which
+    # mangles a leading `--home` flag into a broken `----home`.
+    if ! curl -fsSL https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh -o "$ACME_INSTALLER_DIR/acme.sh"; then
+      echo "下载 acme.sh 失败，请检查网络" >&2
+      exit 1
+    fi
+    # acme.sh's installer copies a bare relative "acme.sh" into place, so it
+    # must be run with that file in the current directory; a subshell keeps
+    # this from changing install.sh's own working directory.
+    ( cd "$ACME_INSTALLER_DIR" && sh ./acme.sh --install --home "$ACME_HOME" --config-home "$ACME_HOME/config" --no-profile )
+    rm -rf "$ACME_INSTALLER_DIR"
+  fi
+
+  echo "==> 通过 Let's Encrypt DNS-01 (Cloudflare) 为 $DOMAIN 申请证书"
+  # Re-running --issue is a no-op unless the existing cert is close to expiry
+  # (acme.sh's own logic), so this is safe on repeat installs.
+  if ! CF_Token="$CF_TOKEN" "$ACME_HOME/acme.sh" --home "$ACME_HOME" --config-home "$ACME_HOME/config" \
+      --issue --dns dns_cf -d "$DOMAIN" --server letsencrypt --keylength 2048; then
+    echo "证书申请失败，请检查域名是否已通过 Cloudflare 解析、Token 是否有 Zone:DNS:Edit 权限" >&2
+    exit 1
+  fi
+
+  echo "==> 安装证书到 $TLS_DIR"
+  "$ACME_HOME/acme.sh" --home "$ACME_HOME" --config-home "$ACME_HOME/config" \
+    --install-cert -d "$DOMAIN" \
+    --key-file "$TLS_DIR/privkey.pem" \
+    --fullchain-file "$TLS_DIR/fullchain.pem" \
+    --reloadcmd "systemctl restart $SERVICE_NAME"
+
+  chown -R "$SERVICE_USER":"$SERVICE_USER" "$TLS_DIR"
+  chmod 750 "$TLS_DIR"
+  chmod 640 "$TLS_DIR"/*.pem
+
+  CERT_ARGS=" -cert $TLS_DIR/fullchain.pem -key $TLS_DIR/privkey.pem"
+fi
+
+EXEC_START="$BIN_DIR/anytls-server -l $LISTEN -p $PASSWORD -db $DB_PATH$CERT_ARGS"
 if [[ "$ENABLE_API" -eq 1 ]]; then
   EXEC_START="$EXEC_START -api-listen $API_LISTEN -api-key $API_KEY"
 fi
@@ -206,9 +277,15 @@ if ! systemctl is-active --quiet "$SERVICE_NAME"; then
   exit 1
 fi
 
-HOST="$(curl -fsS4 --max-time 2 https://ifconfig.me 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}')"
-[[ -n "$HOST" ]] || HOST="<服务器IP>"
 PORT="${LISTEN##*:}"
+if [[ -n "$DOMAIN" ]]; then
+  HOST="$DOMAIN"
+  CONN_LINK="anytls://$PASSWORD@$HOST:$PORT?sni=$DOMAIN"
+else
+  HOST="$(curl -fsS4 --max-time 2 https://ifconfig.me 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}')"
+  [[ -n "$HOST" ]] || HOST="<服务器IP>"
+  CONN_LINK="anytls://$PASSWORD@$HOST:$PORT"
+fi
 
 echo
 echo "======================================================"
@@ -216,7 +293,15 @@ echo " anytls-server 已安装并启动 (systemd service: $SERVICE_NAME)"
 echo "------------------------------------------------------"
 echo " 监听地址:   $LISTEN"
 echo " 密码:       $PASSWORD"
-echo " 连接链接:   anytls://$PASSWORD@$HOST:$PORT"
+echo " 连接链接:   $CONN_LINK"
+if [[ -n "$DOMAIN" ]]; then
+  echo " TLS 证书:   Let's Encrypt（$DOMAIN，acme.sh 已设置定时任务自动续期并重启服务）"
+  echo "            示例客户端使用默认设置即可（不要加 -insecure），会正常校验证书"
+else
+  echo " TLS 证书:   自签名（每次重启进程都会重新生成，不做证书校验）"
+  echo "            示例客户端必须加 -insecure，例如："
+  echo "              anytls-client -s $HOST:$PORT -p $PASSWORD -insecure"
+fi
 if [[ "$ENABLE_API" -eq 1 ]]; then
   echo " 管理 API:   http://$API_LISTEN/  (Key: $API_KEY)"
 fi
