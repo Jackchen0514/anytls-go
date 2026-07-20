@@ -200,18 +200,19 @@ if [[ -n "$DOMAIN" ]]; then
   if [[ ! -x "$ACME_HOME/acme.sh" ]]; then
     echo "==> 安装 acme.sh (用于向 Let's Encrypt 申请证书)"
     ACME_INSTALLER_DIR="$(mktemp -d)"
-    # Fetch the acme.sh script itself and run its --install directly, rather
-    # than piping through the get.acme.sh convenience wrapper: that wrapper
-    # treats its first positional argument as an `email=...` shorthand, which
-    # mangles a leading `--home` flag into a broken `----home`.
-    if ! curl -fsSL https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh -o "$ACME_INSTALLER_DIR/acme.sh"; then
+    # Fetch the full acme.sh repo archive (not just the acme.sh script) and
+    # run --install from inside it, rather than piping through the
+    # get.acme.sh convenience wrapper. That wrapper treats its first
+    # positional argument as an `email=...` shorthand, which mangles a
+    # leading `--home` flag into a broken `----home`. A lone acme.sh script
+    # is also not enough on its own: DNS API hooks like dns_cf live in the
+    # repo's dnsapi/ directory, which acme.sh looks for next to itself.
+    if ! curl -fsSL https://github.com/acmesh-official/acme.sh/archive/refs/heads/master.tar.gz -o "$ACME_INSTALLER_DIR/acme.sh.tar.gz"; then
       echo "下载 acme.sh 失败，请检查网络" >&2
       exit 1
     fi
-    # acme.sh's installer copies a bare relative "acme.sh" into place, so it
-    # must be run with that file in the current directory; a subshell keeps
-    # this from changing install.sh's own working directory.
-    ( cd "$ACME_INSTALLER_DIR" && sh ./acme.sh --install --home "$ACME_HOME" --config-home "$ACME_HOME/config" --no-profile )
+    tar -xzf "$ACME_INSTALLER_DIR/acme.sh.tar.gz" -C "$ACME_INSTALLER_DIR"
+    ( cd "$ACME_INSTALLER_DIR/acme.sh-master" && sh ./acme.sh --install --home "$ACME_HOME" --config-home "$ACME_HOME/config" --no-profile )
     rm -rf "$ACME_INSTALLER_DIR"
   fi
 
