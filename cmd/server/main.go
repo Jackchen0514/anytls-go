@@ -62,7 +62,16 @@ func main() {
 	if *apiListen != "" {
 		apiServer := api.NewServer(userManager, *apiKey, *listen)
 		go func() {
-			if err := apiServer.ListenAndServe(*apiListen); err != nil {
+			var err error
+			if *certFile != "" {
+				// Reuse the same real certificate as the anytls protocol
+				// listener, so the admin page isn't stuck on plain HTTP
+				// once a real -cert/-key is configured.
+				err = apiServer.ListenAndServeTLS(*apiListen, *certFile, *keyFile)
+			} else {
+				err = apiServer.ListenAndServe(*apiListen)
+			}
+			if err != nil {
 				logrus.Fatalln("admin API:", err)
 			}
 		}()

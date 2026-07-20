@@ -338,7 +338,11 @@ else
   echo "              anytls-client -s $HOST:$PORT -p $PASSWORD -insecure"
 fi
 if [[ "$ENABLE_API" -eq 1 ]]; then
-  echo " 管理 API:   http://$API_LISTEN/  (Key: $API_KEY)"
+  if [[ -n "$DOMAIN" ]]; then
+    echo " 管理 API:   https://$API_LISTEN/  (Key: $API_KEY，复用同一份 Let's Encrypt 证书)"
+  else
+    echo " 管理 API:   http://$API_LISTEN/  (Key: $API_KEY)"
+  fi
 fi
 echo " 用户数据库: $DB_PATH"
 echo " 凭据留存于: $CRED_FILE (重新运行本脚本不会更换密码/Key)"

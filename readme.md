@@ -72,6 +72,7 @@ sudo bash install.sh --domain your.domain.com --cloudflare-token CF_API_TOKEN
 - 证书文件安装在 `/etc/anytls/tls/`，仅 `anytls` 系统用户可读。
 - 使用真实证书后，客户端应使用**默认设置**（不要加 `-insecure`）以获得真正的中间人防护；打印出的连接链接已经带上了正确的 `?sni=` 参数。
 - 该流程需要能访问 GitHub（下载 acme.sh 源码）、Cloudflare API 与 Let's Encrypt，且要求 `--domain` 指定的域名已经在使用 Cloudflare 作为 DNS 服务商。
+- 管理网页/API（`-api-listen`）会**自动复用同一份证书**改用 HTTPS 提供服务（服务端只要配置了 `-cert`/`-key` 就会这样，无需额外参数）；未配置真实证书时管理页仍是明文 HTTP。默认 `-api-listen` 只监听 `127.0.0.1`，若要从公网用域名直接访问管理页，还需要另外把它改成监听公网地址（例如手动改 systemd 单元里的 `-api-listen`），证书这块是自动的，是否对公网开放访问仍需你自己决定。
 
 升级到最新版本：
 

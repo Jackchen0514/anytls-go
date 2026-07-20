@@ -44,6 +44,15 @@ func (s *Server) ListenAndServe(addr string) error {
 	return http.ListenAndServe(addr, s.root)
 }
 
+// ListenAndServeTLS serves the admin API/web UI over HTTPS using the same
+// certificate/key the anytls protocol listener uses, so a real certificate
+// obtained for the server (e.g. via install.sh --domain) also covers the
+// admin page instead of it being stuck on plain HTTP.
+func (s *Server) ListenAndServeTLS(addr, certFile, keyFile string) error {
+	logrus.Infoln("[API] Listening (TLS)", addr)
+	return http.ListenAndServeTLS(addr, certFile, keyFile, s.root)
+}
+
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		const prefix = "Bearer "
