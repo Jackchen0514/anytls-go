@@ -197,24 +197,28 @@ if [[ -n "$DOMAIN" ]]; then
   TLS_DIR="$CONF_DIR/tls"
   mkdir -p "$TLS_DIR"
 
-  if [[ ! -x "$ACME_HOME/acme.sh" ]]; then
-    echo "==> 安装 acme.sh (用于向 Let's Encrypt 申请证书)"
-    ACME_INSTALLER_DIR="$(mktemp -d)"
-    # Fetch the full acme.sh repo archive (not just the acme.sh script) and
-    # run --install from inside it, rather than piping through the
-    # get.acme.sh convenience wrapper. That wrapper treats its first
-    # positional argument as an `email=...` shorthand, which mangles a
-    # leading `--home` flag into a broken `----home`. A lone acme.sh script
-    # is also not enough on its own: DNS API hooks like dns_cf live in the
-    # repo's dnsapi/ directory, which acme.sh looks for next to itself.
-    if ! curl -fsSL https://github.com/acmesh-official/acme.sh/archive/refs/heads/master.tar.gz -o "$ACME_INSTALLER_DIR/acme.sh.tar.gz"; then
-      echo "下载 acme.sh 失败，请检查网络" >&2
-      exit 1
-    fi
-    tar -xzf "$ACME_INSTALLER_DIR/acme.sh.tar.gz" -C "$ACME_INSTALLER_DIR"
-    ( cd "$ACME_INSTALLER_DIR/acme.sh-master" && sh ./acme.sh --install --home "$ACME_HOME" --config-home "$ACME_HOME/config" --no-profile )
-    rm -rf "$ACME_INSTALLER_DIR"
+  # Always (re)install: this is fast and idempotent (acme.sh preserves
+  # existing account/domain config), and self-heals hosts that ended up with
+  # an incomplete install from an older/interrupted run of this script -
+  # e.g. only the bare acme.sh script with no dnsapi/ hooks copied alongside
+  # it, which would otherwise keep failing forever since the script itself
+  # already exists.
+  echo "==> 安装/更新 acme.sh (用于向 Let's Encrypt 申请证书)"
+  ACME_INSTALLER_DIR="$(mktemp -d)"
+  # Fetch the full acme.sh repo archive (not just the acme.sh script) and
+  # run --install from inside it, rather than piping through the
+  # get.acme.sh convenience wrapper. That wrapper treats its first
+  # positional argument as an `email=...` shorthand, which mangles a
+  # leading `--home` flag into a broken `----home`. A lone acme.sh script
+  # is also not enough on its own: DNS API hooks like dns_cf live in the
+  # repo's dnsapi/ directory, which acme.sh looks for next to itself.
+  if ! curl -fsSL https://github.com/acmesh-official/acme.sh/archive/refs/heads/master.tar.gz -o "$ACME_INSTALLER_DIR/acme.sh.tar.gz"; then
+    echo "下载 acme.sh 失败，请检查网络" >&2
+    exit 1
   fi
+  tar -xzf "$ACME_INSTALLER_DIR/acme.sh.tar.gz" -C "$ACME_INSTALLER_DIR"
+  ( cd "$ACME_INSTALLER_DIR/acme.sh-master" && sh ./acme.sh --install --home "$ACME_HOME" --config-home "$ACME_HOME/config" --no-profile )
+  rm -rf "$ACME_INSTALLER_DIR"
 
   echo "==> 通过 Let's Encrypt DNS-01 (Cloudflare) 为 $DOMAIN 申请证书"
   # Re-running --issue is a no-op unless the existing cert is close to expiry
