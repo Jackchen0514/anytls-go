@@ -23,6 +23,7 @@ type User struct {
 	ConnLimit         int        `json:"conn_limit"`
 	TrafficResetCycle ResetCycle `json:"traffic_reset_cycle"`
 	TrafficResetAt    time.Time  `json:"traffic_reset_at"`
+	ExpiresAt         time.Time  `json:"expires_at"`
 	CreatedAt         time.Time  `json:"created_at"`
 	UpdatedAt         time.Time  `json:"updated_at"`
 }

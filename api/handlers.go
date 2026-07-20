@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"anytls/user"
 )
@@ -36,6 +37,9 @@ type userRequest struct {
 	IPLimit           *int    `json:"ip_limit"`
 	ConnLimit         *int    `json:"conn_limit"`
 	TrafficResetCycle *string `json:"traffic_reset_cycle"`
+	// ExpiresAt is RFC3339 (e.g. "2026-12-31T23:59:59Z"), or "" to clear
+	// (never expires).
+	ExpiresAt *string `json:"expires_at"`
 }
 
 func validResetCycle(c string) bool {
@@ -45,6 +49,14 @@ func validResetCycle(c string) bool {
 	default:
 		return false
 	}
+}
+
+// parseExpiresAt parses an RFC3339 timestamp, treating "" as "never expires".
+func parseExpiresAt(s string) (time.Time, error) {
+	if s == "" {
+		return time.Time{}, nil
+	}
+	return time.Parse(time.RFC3339, s)
 }
 
 func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
@@ -75,12 +87,22 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "traffic_reset_cycle must be one of none|daily|monthly")
 			return
 		}
+		var expiresAt time.Time
+		if req.ExpiresAt != nil {
+			var err error
+			expiresAt, err = parseExpiresAt(*req.ExpiresAt)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "expires_at must be RFC3339, e.g. 2026-12-31T23:59:59Z")
+				return
+			}
+		}
 
 		u := &user.User{
 			Username:          *req.Username,
 			Password:          *req.Password,
 			Enabled:           true,
 			TrafficResetCycle: user.ResetCycleNone,
+			ExpiresAt:         expiresAt,
 		}
 		if req.Enabled != nil {
 			u.Enabled = *req.Enabled
@@ -176,6 +198,14 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 		if req.TrafficResetCycle != nil && !validResetCycle(*req.TrafficResetCycle) {
 			writeError(w, http.StatusBadRequest, "traffic_reset_cycle must be one of none|daily|monthly")
 			return
+		}
+		if req.ExpiresAt != nil {
+			expiresAt, err := parseExpiresAt(*req.ExpiresAt)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "expires_at must be RFC3339, e.g. 2026-12-31T23:59:59Z")
+				return
+			}
+			u.ExpiresAt = expiresAt
 		}
 		if req.Username != nil {
 			u.Username = *req.Username

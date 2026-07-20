@@ -67,6 +67,10 @@ func handleTcpConnection(ctx context.Context, c net.Conn, s *myServer) {
 		}
 	}
 
+	if userState.IsExpired() {
+		logrus.Debugln("user account expired, rejecting:", userState.Username())
+		return
+	}
 	if userState.IsOverTraffic() {
 		logrus.Debugln("user over traffic quota, rejecting:", userState.Username())
 		return
@@ -90,6 +94,10 @@ func handleTcpConnection(ctx context.Context, c net.Conn, s *myServer) {
 		}()
 		defer stream.Close()
 
+		if userState.IsExpired() {
+			logrus.Debugln("user account expired, closing stream:", userState.Username())
+			return
+		}
 		if userState.IsOverTraffic() {
 			logrus.Debugln("user over traffic quota, closing stream:", userState.Username())
 			return
@@ -119,8 +127,9 @@ func handleTcpConnection(ctx context.Context, c net.Conn, s *myServer) {
 }
 
 // countingConn wraps a proxy Stream to account transferred bytes against a
-// user's traffic quota, closing the stream once the quota is exceeded. Newly
-// opened streams and sessions are rejected once the quota check fails.
+// user's traffic quota, closing the stream once the quota is exceeded or the
+// account expires. Newly opened streams and sessions are rejected once
+// either check fails.
 type countingConn struct {
 	*session.Stream
 	state *user.State
@@ -128,7 +137,7 @@ type countingConn struct {
 
 func (c *countingConn) Read(b []byte) (int, error) {
 	n, err := c.Stream.Read(b)
-	if n > 0 && c.state.AddTraffic(int64(n)) {
+	if n > 0 && (c.state.AddTraffic(int64(n)) || c.state.IsExpired()) {
 		c.Stream.Close()
 	}
 	return n, err
@@ -136,7 +145,7 @@ func (c *countingConn) Read(b []byte) (int, error) {
 
 func (c *countingConn) Write(b []byte) (int, error) {
 	n, err := c.Stream.Write(b)
-	if n > 0 && c.state.AddTraffic(int64(n)) {
+	if n > 0 && (c.state.AddTraffic(int64(n)) || c.state.IsExpired()) {
 		c.Stream.Close()
 	}
 	return n, err

@@ -198,6 +198,14 @@ func (st *State) IsOverTraffic() bool {
 	return st.user.TrafficUsedBytes+st.usedDelta >= limit
 }
 
+// IsExpired reports whether the user's account has passed its expiry time
+// (zero ExpiresAt means the account never expires).
+func (st *State) IsExpired() bool {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return !st.user.ExpiresAt.IsZero() && !time.Now().Before(st.user.ExpiresAt)
+}
+
 // AcquireIP registers ip as active for this user, enforcing IPLimit (0 = unlimited).
 // Returns false if the limit would be exceeded by a new distinct IP.
 func (st *State) AcquireIP(ip string) bool {

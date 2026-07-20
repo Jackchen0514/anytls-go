@@ -71,9 +71,9 @@
   button.danger:hover { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
   button.small { padding: 4px 9px; font-size: 12px; }
   .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 8px; flex-wrap: wrap; }
-  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
   th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
   tr:last-child td { border-bottom: none; }
   td.actions { white-space: nowrap; text-align: right; }
@@ -181,6 +181,7 @@
           <th>IP</th>
           <th>连接</th>
           <th>重置周期</th>
+          <th>到期时间</th>
           <th></th>
         </tr>
       </thead>
@@ -228,6 +229,10 @@
         <option value="daily">每天</option>
         <option value="monthly">每月</option>
       </select>
+    </div>
+    <div class="field">
+      <label>到期日期（留空 = 永不过期）</label>
+      <input id="f_expires" type="date">
     </div>
     <div class="dialog-actions">
       <button type="button" id="cancelBtn">取消</button>
@@ -354,6 +359,7 @@ function render() {
       <td>${countLabel(usage.active_ips || 0, u.ip_limit || 0)}</td>
       <td>${countLabel(usage.active_conns || 0, u.conn_limit || 0)}</td>
       <td class="muted">${resetLabel(u.traffic_reset_cycle)}</td>
+      <td>${expiresLabel(u)}</td>
       <td class="actions">
         <button class="small" data-act="edit">编辑</button>
         <button class="small" data-act="qr">订阅</button>
@@ -370,6 +376,37 @@ function render() {
 
 function resetLabel(c) {
   return {none: '不重置', daily: '每天', monthly: '每月'}[c] || c || '不重置';
+}
+
+// Go's zero time.Time marshals as "0001-01-01T00:00:00Z" - treat that as "never expires".
+function isZeroDate(iso) {
+  return !iso || iso.startsWith('0001-01-01');
+}
+
+function expiresLabel(u) {
+  if (isZeroDate(u.expires_at)) return '<span class="muted">永不过期</span>';
+  const exp = new Date(u.expires_at);
+  const days = Math.ceil((exp - Date.now()) / 86400000);
+  const dateStr = exp.toLocaleDateString();
+  if (days < 0) return `<span class="badge off">已过期</span> <span class="muted">${dateStr}</span>`;
+  if (days <= 7) return `<span class="badge" style="background:color-mix(in srgb, var(--warn) 15%, transparent); color:var(--warn);">剩 ${days} 天</span> <span class="muted">${dateStr}</span>`;
+  return `<span class="muted">${dateStr}</span>`;
+}
+
+// "YYYY-MM-DD" (local) -> ISO instant at end of that day, local time; "" stays "".
+function dateInputToIso(dateStr) {
+  if (!dateStr) return '';
+  return new Date(dateStr + 'T23:59:59').toISOString();
+}
+
+// ISO instant -> "YYYY-MM-DD" (local) for the date input's value.
+function isoToDateInput(iso) {
+  if (isZeroDate(iso)) return '';
+  const d = new Date(iso);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 function escapeHtml(s) {
@@ -389,6 +426,7 @@ function openCreate() {
   $('f_ip').value = 0;
   $('f_conn').value = 0;
   $('f_reset').value = 'none';
+  $('f_expires').value = '';
   dialog.showModal();
 }
 
@@ -405,6 +443,7 @@ function openEdit(u) {
   $('f_ip').value = u.ip_limit || 0;
   $('f_conn').value = u.conn_limit || 0;
   $('f_reset').value = u.traffic_reset_cycle || 'none';
+  $('f_expires').value = isoToDateInput(u.expires_at);
   dialog.showModal();
 }
 
@@ -503,6 +542,7 @@ $('form').addEventListener('submit', async (e) => {
     ip_limit: parseInt($('f_ip').value || 0, 10),
     conn_limit: parseInt($('f_conn').value || 0, 10),
     traffic_reset_cycle: $('f_reset').value,
+    expires_at: dateInputToIso($('f_expires').value),
   };
   const pw = $('f_password').value;
   if (pw || !id) payload.password = pw;
