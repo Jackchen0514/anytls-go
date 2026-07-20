@@ -138,6 +138,12 @@
   .login-card .field { margin-bottom: 14px; }
   .login-card button[type=submit] { width: 100%; padding: 9px 0; font-size: 14px; }
   .login-error { color: var(--danger); font-size: 12px; min-height: 16px; margin: -4px 0 12px; }
+
+  #qrDialog { width: min(320px, 92vw); }
+  .qr-canvas-wrap { display: flex; justify-content: center; margin-bottom: 14px; }
+  .qr-canvas-wrap canvas { width: 220px; height: 220px; image-rendering: pixelated; border-radius: 8px; }
+  .uri-row { display: flex; gap: 6px; margin-bottom: 4px; }
+  .uri-row input { flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -230,12 +236,34 @@
   </form>
 </dialog>
 
+<dialog id="qrDialog">
+  <div class="dialog-inner">
+    <h2 id="qrTitle">订阅</h2>
+    <div class="qr-canvas-wrap"><canvas id="qrCanvas"></canvas></div>
+    <div class="uri-row">
+      <input id="qrUri" readonly>
+      <button type="button" id="qrCopyBtn">复制</button>
+    </div>
+    <div class="field" style="margin-top:14px;">
+      <label>服务器地址（连接用，非本管理页地址）</label>
+      <input id="qrHost" autocomplete="off">
+    </div>
+    <p class="hint" id="qrHostHint" style="margin-top:-6px;">若通过 SSH 隧道等方式访问本管理页，这里需手动改成服务器真实可连接的地址</p>
+    <div class="dialog-actions">
+      <button type="button" id="qrCloseBtn">关闭</button>
+    </div>
+  </div>
+</dialog>
+
 <div id="toast"></div>
 
+<script src="qrcode.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const dialog = $('dialog');
+const qrDialog = $('qrDialog');
 const GB = 1024 ** 3;
+let serverPort = '';
 
 function getKey() { return localStorage.getItem('anytls_api_key') || ''; }
 function setKey(k) { localStorage.setItem('anytls_api_key', k); }
@@ -328,10 +356,12 @@ function render() {
       <td class="muted">${resetLabel(u.traffic_reset_cycle)}</td>
       <td class="actions">
         <button class="small" data-act="edit">编辑</button>
+        <button class="small" data-act="qr">订阅</button>
         <button class="small" data-act="reset">重置流量</button>
         <button class="small danger" data-act="delete">删除</button>
       </td>`;
     tr.querySelector('[data-act=edit]').onclick = () => openEdit(u);
+    tr.querySelector('[data-act=qr]').onclick = () => openQr(u);
     tr.querySelector('[data-act=reset]').onclick = () => resetTraffic(u);
     tr.querySelector('[data-act=delete]').onclick = () => deleteUser(u);
     rows.appendChild(tr);
@@ -376,6 +406,87 @@ function openEdit(u) {
   $('f_conn').value = u.conn_limit || 0;
   $('f_reset').value = u.traffic_reset_cycle || 'none';
   dialog.showModal();
+}
+
+// --- Subscription QR code ---
+
+function getConnHost() {
+  return localStorage.getItem('anytls_conn_host') || location.hostname;
+}
+function setConnHost(h) {
+  localStorage.setItem('anytls_conn_host', h);
+}
+
+function buildUri(u) {
+  const host = $('qrHost').value.trim() || 'YOUR_SERVER';
+  const port = serverPort || '8443';
+  return `anytls://${encodeURIComponent(u.password)}@${host}:${port}`;
+}
+
+function renderQr(text) {
+  const canvas = $('qrCanvas');
+  const qr = qrcode(0, 'M');
+  qr.addData(text);
+  qr.make();
+  const count = qr.getModuleCount();
+  const cellSize = 6;
+  canvas.width = count * cellSize;
+  canvas.height = count * cellSize;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#000';
+  for (let r = 0; r < count; r++) {
+    for (let c = 0; c < count; c++) {
+      if (qr.isDark(r, c)) ctx.fillRect(c * cellSize, r * cellSize, cellSize, cellSize);
+    }
+  }
+}
+
+let qrUser = null;
+
+function refreshQr() {
+  if (!qrUser) return;
+  const uri = buildUri(qrUser);
+  $('qrUri').value = uri;
+  renderQr(uri);
+}
+
+function openQr(u) {
+  qrUser = u;
+  $('qrTitle').textContent = '订阅: ' + u.username;
+  $('qrHost').value = getConnHost();
+  refreshQr();
+  qrDialog.showModal();
+}
+
+$('qrHost').addEventListener('input', () => {
+  setConnHost($('qrHost').value.trim());
+  refreshQr();
+});
+
+$('qrCloseBtn').onclick = () => qrDialog.close();
+
+$('qrCopyBtn').onclick = async () => {
+  const uri = $('qrUri').value;
+  try {
+    await navigator.clipboard.writeText(uri);
+    toast('已复制');
+  } catch (e) {
+    // Clipboard API requires a secure context (HTTPS/localhost); this admin
+    // page is commonly served over plain HTTP, so fall back to manual copy.
+    $('qrUri').select();
+    toast('无法自动复制（当前非 HTTPS），已为你选中链接，按 Ctrl/Cmd+C 复制', true);
+  }
+};
+
+async function loadServerInfo() {
+  try {
+    const info = await api('/api/server');
+    serverPort = (info.listen || '').split(':').pop() || '';
+  } catch (e) {
+    // non-fatal: QR codes will just show a placeholder port until this succeeds
+  }
 }
 
 $('newUserBtn').onclick = openCreate;
@@ -451,8 +562,9 @@ function showLogin(msg) {
 function showApp() {
   $('loginScreen').style.display = 'none';
   $('app').style.display = 'block';
+  loadServerInfo();
   if (!pollTimer) {
-    pollTimer = setInterval(() => { if (!dialog.open) loadUsers(); }, 5000);
+    pollTimer = setInterval(() => { if (!dialog.open && !qrDialog.open) loadUsers(); }, 5000);
   }
 }
 

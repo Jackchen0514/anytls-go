@@ -5,7 +5,7 @@ import (
 	"io/fs"
 )
 
-//go:embed web/index.html
+//go:embed web/index.html web/qrcode.js
 var webFiles embed.FS
 
 func webFS() fs.FS {

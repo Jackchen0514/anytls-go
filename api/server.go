@@ -13,20 +13,25 @@ import (
 )
 
 type Server struct {
-	manager *user.Manager
-	apiKey  string
-	root    *http.ServeMux
+	manager    *user.Manager
+	apiKey     string
+	serverAddr string
+	root       *http.ServeMux
 }
 
 // NewServer builds the admin HTTP server: a small JSON API under /api/,
 // protected by a static API key, and an unauthenticated static admin web UI
 // at / that talks to the API from the browser using a key entered by hand.
-func NewServer(manager *user.Manager, apiKey string) *Server {
-	s := &Server{manager: manager, apiKey: apiKey}
+// serverAddr is the anytls protocol listen address (the `-l` flag), exposed
+// read-only via /api/server so the web UI can build per-user connection
+// links/QR codes without the admin having to type the port in by hand.
+func NewServer(manager *user.Manager, apiKey string, serverAddr string) *Server {
+	s := &Server{manager: manager, apiKey: apiKey, serverAddr: serverAddr}
 
 	apiMux := http.NewServeMux()
 	apiMux.HandleFunc("/api/users", s.handleUsers)
 	apiMux.HandleFunc("/api/users/", s.handleUserByID)
+	apiMux.HandleFunc("/api/server", s.handleServerInfo)
 
 	s.root = http.NewServeMux()
 	s.root.Handle("/api/", s.authMiddleware(apiMux))

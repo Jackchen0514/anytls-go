@@ -55,7 +55,7 @@ func main() {
 	}
 
 	if *apiListen != "" {
-		apiServer := api.NewServer(userManager, *apiKey)
+		apiServer := api.NewServer(userManager, *apiKey, *listen)
 		go func() {
 			if err := apiServer.ListenAndServe(*apiListen); err != nil {
 				logrus.Fatalln("admin API:", err)

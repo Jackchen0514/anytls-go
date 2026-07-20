@@ -15,6 +15,14 @@ type userView struct {
 	Usage user.Usage `json:"usage"`
 }
 
+func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"listen": s.serverAddr})
+}
+
 func (s *Server) view(u *user.User) userView {
 	usage, _ := s.manager.GetUsage(u.ID)
 	return userView{User: u, Usage: usage}
