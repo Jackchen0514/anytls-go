@@ -192,10 +192,21 @@ chown root:root "$CRED_FILE"
 chmod 600 "$CRED_FILE"
 
 CERT_ARGS=""
+ACME_HOME="$CONF_DIR/acme.sh"
+TLS_DIR="$CONF_DIR/tls"
 if [[ -n "$DOMAIN" ]]; then
-  ACME_HOME="$CONF_DIR/acme.sh"
-  TLS_DIR="$CONF_DIR/tls"
   mkdir -p "$TLS_DIR"
+  # Fix ownership/mode on the directory itself right away, independent of
+  # the `umask 077` set above for the credentials file (still in effect
+  # here) and of whether the cert files exist yet: otherwise the directory
+  # stays 700 root:root and the anytls user can't traverse into it to read
+  # the certs even after their own ownership/mode is fixed later.
+  chown "$SERVICE_USER":"$SERVICE_USER" "$TLS_DIR"
+  chmod 750 "$TLS_DIR"
+  # Paths only - the files themselves don't exist until the --issue/
+  # --install-cert step further down, which needs the systemd unit (below)
+  # to already exist so its reloadcmd has something to restart.
+  CERT_ARGS=" -cert $TLS_DIR/fullchain.pem -key $TLS_DIR/privkey.pem"
 
   # Always (re)install: this is fast and idempotent (acme.sh preserves
   # existing account/domain config), and self-heals hosts that ended up with
@@ -219,28 +230,6 @@ if [[ -n "$DOMAIN" ]]; then
   tar -xzf "$ACME_INSTALLER_DIR/acme.sh.tar.gz" -C "$ACME_INSTALLER_DIR"
   ( cd "$ACME_INSTALLER_DIR/acme.sh-master" && sh ./acme.sh --install --home "$ACME_HOME" --config-home "$ACME_HOME/config" --no-profile )
   rm -rf "$ACME_INSTALLER_DIR"
-
-  echo "==> 通过 Let's Encrypt DNS-01 (Cloudflare) 为 $DOMAIN 申请证书"
-  # Re-running --issue is a no-op unless the existing cert is close to expiry
-  # (acme.sh's own logic), so this is safe on repeat installs.
-  if ! CF_Token="$CF_TOKEN" "$ACME_HOME/acme.sh" --home "$ACME_HOME" --config-home "$ACME_HOME/config" \
-      --issue --dns dns_cf -d "$DOMAIN" --server letsencrypt --keylength 2048; then
-    echo "证书申请失败，请检查域名是否已通过 Cloudflare 解析、Token 是否有 Zone:DNS:Edit 权限" >&2
-    exit 1
-  fi
-
-  echo "==> 安装证书到 $TLS_DIR"
-  "$ACME_HOME/acme.sh" --home "$ACME_HOME" --config-home "$ACME_HOME/config" \
-    --install-cert -d "$DOMAIN" \
-    --key-file "$TLS_DIR/privkey.pem" \
-    --fullchain-file "$TLS_DIR/fullchain.pem" \
-    --reloadcmd "systemctl restart $SERVICE_NAME"
-
-  chown -R "$SERVICE_USER":"$SERVICE_USER" "$TLS_DIR"
-  chmod 750 "$TLS_DIR"
-  chmod 640 "$TLS_DIR"/*.pem
-
-  CERT_ARGS=" -cert $TLS_DIR/fullchain.pem -key $TLS_DIR/privkey.pem"
 fi
 
 EXEC_START="$BIN_DIR/anytls-server -l $LISTEN -p $PASSWORD -db $DB_PATH$CERT_ARGS"
@@ -273,7 +262,36 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now "$SERVICE_NAME"
+systemctl enable "$SERVICE_NAME"
+
+if [[ -n "$DOMAIN" ]]; then
+  echo "==> 通过 Let's Encrypt DNS-01 (Cloudflare) 为 $DOMAIN 申请证书"
+  # Re-running --issue is a no-op unless the existing cert is close to expiry
+  # (acme.sh's own logic), so this is safe on repeat installs.
+  if ! CF_Token="$CF_TOKEN" "$ACME_HOME/acme.sh" --home "$ACME_HOME" --config-home "$ACME_HOME/config" \
+      --issue --dns dns_cf -d "$DOMAIN" --server letsencrypt --keylength 2048; then
+    echo "证书申请失败，请检查域名是否已通过 Cloudflare 解析、Token 是否有 Zone:DNS:Edit 权限" >&2
+    exit 1
+  fi
+
+  echo "==> 安装证书到 $TLS_DIR"
+  # acme.sh writes fullchain/key as root:root (mode 600 on the key), which
+  # the unprivileged anytls service user can't read - and it does this again
+  # on every future automatic renewal, not just now. So the reloadcmd fixes
+  # ownership/permissions *and* restarts, every time it runs; we also redo
+  # it once more right after for this first run, in case the reloadcmd's
+  # execution context ever behaves differently.
+  "$ACME_HOME/acme.sh" --home "$ACME_HOME" --config-home "$ACME_HOME/config" \
+    --install-cert -d "$DOMAIN" \
+    --key-file "$TLS_DIR/privkey.pem" \
+    --fullchain-file "$TLS_DIR/fullchain.pem" \
+    --reloadcmd "chown $SERVICE_USER:$SERVICE_USER $TLS_DIR/fullchain.pem $TLS_DIR/privkey.pem && chmod 640 $TLS_DIR/fullchain.pem $TLS_DIR/privkey.pem && systemctl restart $SERVICE_NAME"
+
+  chown -R "$SERVICE_USER":"$SERVICE_USER" "$TLS_DIR"
+  chmod 750 "$TLS_DIR"
+  chmod 640 "$TLS_DIR"/*.pem
+fi
+
 systemctl restart "$SERVICE_NAME"
 
 sleep 1
