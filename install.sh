@@ -267,11 +267,19 @@ systemctl enable "$SERVICE_NAME"
 if [[ -n "$DOMAIN" ]]; then
   echo "==> 通过 Let's Encrypt DNS-01 (Cloudflare) 为 $DOMAIN 申请证书"
   # Re-running --issue is a no-op unless the existing cert is close to expiry
-  # (acme.sh's own logic), so this is safe on repeat installs.
-  if ! CF_Token="$CF_TOKEN" "$ACME_HOME/acme.sh" --home "$ACME_HOME" --config-home "$ACME_HOME/config" \
+  # (acme.sh's own logic): it then exits with code 2 (RENEW_SKIP), not 0 -
+  # that's not a failure, it means a valid cert from an earlier run already
+  # exists, so fall through to --install-cert below either way.
+  if CF_Token="$CF_TOKEN" "$ACME_HOME/acme.sh" --home "$ACME_HOME" --config-home "$ACME_HOME/config" \
       --issue --dns dns_cf -d "$DOMAIN" --server letsencrypt --keylength 2048; then
-    echo "证书申请失败，请检查域名是否已通过 Cloudflare 解析、Token 是否有 Zone:DNS:Edit 权限" >&2
-    exit 1
+    :
+  else
+    ISSUE_RC=$?
+    if [[ "$ISSUE_RC" -ne 2 ]]; then
+      echo "证书申请失败，请检查域名是否已通过 Cloudflare 解析、Token 是否有 Zone:DNS:Edit 权限" >&2
+      exit 1
+    fi
+    echo "已有未到期的证书，跳过重新签发，直接安装现有证书"
   fi
 
   echo "==> 安装证书到 $TLS_DIR"
@@ -280,12 +288,16 @@ if [[ -n "$DOMAIN" ]]; then
   # on every future automatic renewal, not just now. So the reloadcmd fixes
   # ownership/permissions *and* restarts, every time it runs; we also redo
   # it once more right after for this first run, in case the reloadcmd's
-  # execution context ever behaves differently.
+  # execution context ever behaves differently. Don't let a non-zero exit
+  # here (e.g. the reloadcmd hiccuping) abort the whole script under set -e:
+  # the fallback chown/chmod and restart+health-check below are exactly the
+  # safety net for that, and can only run if we get to them.
   "$ACME_HOME/acme.sh" --home "$ACME_HOME" --config-home "$ACME_HOME/config" \
     --install-cert -d "$DOMAIN" \
     --key-file "$TLS_DIR/privkey.pem" \
     --fullchain-file "$TLS_DIR/fullchain.pem" \
-    --reloadcmd "chown $SERVICE_USER:$SERVICE_USER $TLS_DIR/fullchain.pem $TLS_DIR/privkey.pem && chmod 640 $TLS_DIR/fullchain.pem $TLS_DIR/privkey.pem && systemctl restart $SERVICE_NAME"
+    --reloadcmd "chown $SERVICE_USER:$SERVICE_USER $TLS_DIR/fullchain.pem $TLS_DIR/privkey.pem && chmod 640 $TLS_DIR/fullchain.pem $TLS_DIR/privkey.pem && systemctl restart $SERVICE_NAME" \
+    || echo "警告: acme.sh --install-cert 报告了非零退出码，继续尝试自行修复权限并重启服务" >&2
 
   chown -R "$SERVICE_USER":"$SERVICE_USER" "$TLS_DIR"
   chmod 750 "$TLS_DIR"
