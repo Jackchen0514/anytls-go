@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Install anytls-server as a systemd service, built from the local source
-# checkout (this script never downloads the anytls-go source itself).
+# Install anytls-server as a systemd service, using a prebuilt release
+# binary downloaded from GitHub (no source checkout or Go toolchain needed).
 #
 # Usage:
 #   sudo bash install.sh [options]
+#   curl -fsSL https://raw.githubusercontent.com/Jackchen0514/anytls-go/main/install.sh | sudo bash
 #
 # Options:
 #   -l, --listen ADDR        server listen address (default: 0.0.0.0:8443)
@@ -12,13 +13,19 @@
 #       --api-listen ADDR    admin API listen address (default: 127.0.0.1:8843)
 #       --api-key KEY        admin API key (default: random, generated once)
 #       --no-api             disable the admin API entirely
+#       --version TAG         release tag to install (default: latest)
 #   -h, --help               show this help
 #
-# Re-running this script (e.g. after `git pull`) rebuilds and redeploys the
-# binaries without rotating an already-generated password/API key, unless you
-# pass -p/--password or --api-key explicitly.
+# Re-running this script (e.g. with a newer --version) redeploys the binaries
+# without rotating an already-generated password/API key, unless you pass
+# -p/--password or --api-key explicitly.
+#
+# Requires network access to github.com to download the release archive.
+# There is no fallback to a local build - if that's not an option for you,
+# clone the repo and run `go build ./cmd/server` / `./cmd/client` yourself.
 set -euo pipefail
 
+REPO="Jackchen0514/anytls-go"
 BIN_DIR="/usr/local/bin"
 DATA_DIR="/var/lib/anytls"
 CONF_DIR="/etc/anytls"
@@ -33,8 +40,9 @@ DB_PATH="$DATA_DIR/anytls.db"
 API_LISTEN="127.0.0.1:8843"
 API_KEY=""
 ENABLE_API=1
+VERSION="latest"
 
-usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -44,6 +52,7 @@ while [[ $# -gt 0 ]]; do
     --api-listen) API_LISTEN="$2"; shift 2 ;;
     --api-key) API_KEY="$2"; shift 2 ;;
     --no-api) ENABLE_API=0; shift ;;
+    --version) VERSION="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "未知参数: $1" >&2; usage; exit 1 ;;
   esac
@@ -54,21 +63,68 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-if ! command -v go >/dev/null 2>&1; then
-  echo "未找到 go 工具链，请先安装 Go >= 1.24 (https://go.dev/dl/) 后重试" >&2
-  exit 1
-fi
+for tool in curl tar sha256sum; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "需要 $tool，请先安装后重试" >&2; exit 1; }
+done
 
 if ! command -v systemctl >/dev/null 2>&1; then
   echo "警告: 未检测到 systemd，将只安装二进制文件，不会创建系统服务。" >&2
 fi
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-cd "$SCRIPT_DIR"
+case "$(uname -s)" in
+  Linux) ;;
+  *) echo "目前只提供 Linux 预编译包，当前系统: $(uname -s)" >&2; exit 1 ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64) ARCH=amd64 ;;
+  aarch64|arm64) ARCH=arm64 ;;
+  *) echo "不支持的架构: $(uname -m)（目前只提供 amd64/arm64 预编译包）" >&2; exit 1 ;;
+esac
 
-if [[ ! -f go.mod ]] || ! grep -q '^module anytls$' go.mod; then
-  echo "请在 anytls-go 源码目录下运行本脚本" >&2
+if [[ "$VERSION" == "latest" ]]; then
+  DOWNLOAD_BASE="https://github.com/$REPO/releases/latest/download"
+else
+  DOWNLOAD_BASE="https://github.com/$REPO/releases/download/$VERSION"
+fi
+ASSET="anytls-linux-$ARCH.tar.gz"
+
+WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "$WORK_DIR"' EXIT
+
+echo "==> 下载预编译包: $DOWNLOAD_BASE/$ASSET"
+if ! curl -fsSL "$DOWNLOAD_BASE/$ASSET" -o "$WORK_DIR/$ASSET"; then
+  echo "下载失败: $DOWNLOAD_BASE/$ASSET" >&2
+  echo "请检查网络是否能访问 GitHub，或用 --version 指定一个存在的发布版本号" >&2
   exit 1
+fi
+if ! curl -fsSL "$DOWNLOAD_BASE/SHA256SUMS" -o "$WORK_DIR/SHA256SUMS"; then
+  echo "下载校验和文件失败: $DOWNLOAD_BASE/SHA256SUMS" >&2
+  exit 1
+fi
+
+echo "==> 校验下载文件完整性"
+EXPECTED="$(grep " $ASSET\$" "$WORK_DIR/SHA256SUMS" | awk '{print $1}')"
+if [[ -z "$EXPECTED" ]]; then
+  echo "校验和文件中找不到 $ASSET 对应记录" >&2
+  exit 1
+fi
+ACTUAL="$(sha256sum "$WORK_DIR/$ASSET" | awk '{print $1}')"
+if [[ "$EXPECTED" != "$ACTUAL" ]]; then
+  echo "校验和不匹配，下载可能已损坏或被篡改，已中止安装" >&2
+  echo "期望: $EXPECTED" >&2
+  echo "实际: $ACTUAL" >&2
+  exit 1
+fi
+
+echo "==> 解压并安装二进制到 $BIN_DIR"
+tar -xzf "$WORK_DIR/$ASSET" -C "$WORK_DIR"
+install -m755 "$WORK_DIR/anytls-server" "$BIN_DIR/anytls-server"
+install -m755 "$WORK_DIR/anytls-client" "$BIN_DIR/anytls-client"
+
+if ! command -v systemctl >/dev/null 2>&1; then
+  echo "完成。手动运行示例:"
+  echo "  anytls-server -l $LISTEN -p <密码> -db $DB_PATH"
+  exit 0
 fi
 
 gen_secret() {
@@ -92,22 +148,6 @@ fi
 [[ -n "$PASSWORD" ]] || PASSWORD="$(gen_secret)"
 if [[ "$ENABLE_API" -eq 1 && -z "$API_KEY" ]]; then
   API_KEY="$(gen_secret)"
-fi
-
-echo "==> 编译 anytls-server / anytls-client"
-BUILD_TMP="$(mktemp -d)"
-trap 'rm -rf "$BUILD_TMP"' EXIT
-go build -trimpath -o "$BUILD_TMP/anytls-server" ./cmd/server
-go build -trimpath -o "$BUILD_TMP/anytls-client" ./cmd/client
-
-echo "==> 安装二进制到 $BIN_DIR"
-install -m755 "$BUILD_TMP/anytls-server" "$BIN_DIR/anytls-server"
-install -m755 "$BUILD_TMP/anytls-client" "$BIN_DIR/anytls-client"
-
-if ! command -v systemctl >/dev/null 2>&1; then
-  echo "完成。手动运行示例:"
-  echo "  anytls-server -l $LISTEN -p $PASSWORD -db $DB_PATH"
-  exit 0
 fi
 
 if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
