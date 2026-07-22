@@ -40,7 +40,7 @@ func handleTcpConnection(ctx context.Context, c net.Conn, s *myServer) {
 	by, err := b.ReadBytes(32)
 	if err != nil {
 		b.Resize(0, n)
-		fallback(ctx, c)
+		fallback(ctx, c, s.fallbackAddr)
 		return
 	}
 	var hash [32]byte
@@ -48,13 +48,13 @@ func handleTcpConnection(ctx context.Context, c net.Conn, s *myServer) {
 	userState, ok := s.userManager.LookupByPasswordHash(hash)
 	if !ok {
 		b.Resize(0, n)
-		fallback(ctx, c)
+		fallback(ctx, c, s.fallbackAddr)
 		return
 	}
 	by, err = b.ReadBytes(2)
 	if err != nil {
 		b.Resize(0, n)
-		fallback(ctx, c)
+		fallback(ctx, c, s.fallbackAddr)
 		return
 	}
 	paddingLen := binary.BigEndian.Uint16(by)
@@ -62,7 +62,7 @@ func handleTcpConnection(ctx context.Context, c net.Conn, s *myServer) {
 		_, err = b.ReadBytes(int(paddingLen))
 		if err != nil {
 			b.Resize(0, n)
-			fallback(ctx, c)
+			fallback(ctx, c, s.fallbackAddr)
 			return
 		}
 	}
@@ -151,7 +151,23 @@ func (c *countingConn) Write(b []byte) (int, error) {
 	return n, err
 }
 
-func fallback(ctx context.Context, c net.Conn) {
-	// 暂未实现
-	logrus.Debugln("fallback:", c.RemoteAddr())
+// fallback forwards a connection that failed the anytls auth handshake to a
+// local plain service (e.g. a real web server), so active probing sees a
+// normal response instead of the connection being dropped. If addr is empty,
+// the connection is simply closed by the caller's deferred c.Close().
+func fallback(ctx context.Context, c net.Conn, addr string) {
+	if addr == "" {
+		logrus.Debugln("fallback: no -fallback configured, closing", c.RemoteAddr())
+		return
+	}
+	logrus.Debugln("fallback:", c.RemoteAddr(), "->", addr)
+
+	rc, err := net.Dial("tcp", addr)
+	if err != nil {
+		logrus.Debugln("fallback dial:", err)
+		return
+	}
+	defer rc.Close()
+
+	bufio.CopyConn(ctx, c, rc)
 }

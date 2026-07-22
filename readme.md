@@ -40,6 +40,16 @@
 
 证书需要自行获取/续期并在续期后重启进程（`install.sh --domain ... --cloudflare-token ...` 可以自动完成这一整套流程，见下文"使用真实证书"）。
 
+### Fallback（主动探测防护）
+
+认证失败的连接（密码错误、非 anytls 流量等）默认会被直接断开。加上 `-fallback` 参数后，这类连接会被转发到本机指定端口的普通服务（例如一个正常运行的 nginx/静态网站），使得主动探测者看到的是一个正常的网页响应而不是连接中断：
+
+```
+./anytls-server -l 0.0.0.0:8443 -p 密码 -fallback 127.0.0.1:80
+```
+
+未配置 `-fallback` 时行为不变，认证失败仍直接断开连接。
+
 ### 一键安装（systemd）
 
 `install.sh` / `update.sh` 使用 GitHub Release 上由 CI 交叉编译好的二进制（见 [`.github/workflows/release.yml`](./.github/workflows/release.yml)，`amd64`/`arm64` Linux），下载后校验 `SHA256SUMS` 再安装，**不需要本机安装 Go、也不需要 clone 源码**，只需能访问 github.com：

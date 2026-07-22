@@ -25,6 +25,7 @@ func main() {
 	apiKey := flag.String("api-key", "", "static API key required by the admin API (required if -api-listen is set)")
 	certFile := flag.String("cert", "", "TLS certificate file (PEM); requires -key. Falls back to a generated self-signed cert if unset")
 	keyFile := flag.String("key", "", "TLS private key file (PEM); requires -cert")
+	fallbackAddr := flag.String("fallback", "", "local address to forward connections to when the anytls auth handshake fails, e.g. 127.0.0.1:80 (connection is just closed if unset)")
 	flag.Parse()
 
 	if *apiListen != "" && *apiKey == "" {
@@ -130,7 +131,7 @@ func main() {
 	}
 
 	ctx := context.Background()
-	server := NewMyServer(tlsConfig, userManager)
+	server := NewMyServer(tlsConfig, userManager, *fallbackAddr)
 
 	for {
 		c, err := listener.Accept()
