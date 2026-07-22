@@ -52,6 +52,8 @@
 
 fallback 目标只需要在本机监听普通 HTTP 即可——anytls-server 自己已经用真实证书完成了 TLS 握手，转发给 fallback 目标的是解密后的明文 HTTP 请求，浏览器/探测端看到的仍然是一次完整、合法的 HTTPS 响应。一个最简单的 nginx + 静态页示例见 [`examples/fallback`](./examples/fallback)。
 
+用 `install.sh` 部署时这一套默认会自动配置好（见下文），不需要手动照着这个示例操作；只有不通过 `install.sh`、自己跑二进制/写 systemd 单元时才需要手动参考这个示例。
+
 ### 一键安装（systemd）
 
 `install.sh` / `update.sh` 使用 GitHub Release 上由 CI 交叉编译好的二进制（见 [`.github/workflows/release.yml`](./.github/workflows/release.yml)，`amd64`/`arm64` Linux），下载后校验 `SHA256SUMS` 再安装，**不需要本机安装 Go、也不需要 clone 源码**，只需能访问 github.com：
@@ -67,9 +69,13 @@ sudo bash install.sh                                  # 随机生成密码与管
 sudo bash install.sh -p 自定义密码 --api-key 自定义Key   # 指定密码/Key
 sudo bash install.sh --no-api                          # 不启用管理 API
 sudo bash install.sh --version v0.0.14                 # 安装指定版本，默认 latest
+sudo bash install.sh --no-fallback                     # 不自动配置本地 fallback 网站
+sudo bash install.sh --fallback-port 8081              # fallback 站点改用其他本机端口（默认 8080）
 ```
 
 脚本会下载对应架构的预编译包并安装 `anytls-server` / `anytls-client` 到 `/usr/local/bin`，创建独立系统用户运行服务，写入并启用 `anytls-server` systemd 服务，密码/API Key 会保存在 `/etc/anytls/credentials.env`（重复运行 `install.sh` 不会更换已生成的密码/Key）。若无法访问 GitHub 下载预编译包，脚本会直接报错退出，不会回退到本地编译；此时可自行 clone 仓库后用 `go build ./cmd/server` / `./cmd/client` 编译安装。
+
+默认还会自动配置好上一节所说的 fallback（除非加 `--no-fallback`）：如果本机没有 nginx 会自动安装（`apt-get`/`dnf`/`yum`，识别不了包管理器则跳过并给出提示），部署一个占位页面并让 nginx 监听 `127.0.0.1:<--fallback-port>`（默认 `8080`，只监听本地回环，不会跟这台机器上已有的其他网站抢端口），再把 `-fallback` 接到 `anytls-server` 的 systemd 单元里。这一步失败（装不了 nginx、端口被占用等）只会打印警告，不影响 anytls-server 本身正常安装。重新运行 `install.sh` 会把 fallback 站点的配置和页面内容重置回脚本自带的默认版本，覆盖掉你手动做的修改；卸载时 `uninstall.sh` 会一并移除这个 nginx 站点配置（不会连 nginx 本身也卸载）。
 
 #### 使用真实证书（可选）
 

@@ -20,12 +20,26 @@
 #                             self-signed certificate (clients need -insecure)
 #       --cloudflare-token T  Cloudflare API token with Zone:DNS:Edit on the
 #                             zone for --domain (required together with it)
+#       --no-fallback         don't set up the local nginx fallback site (see
+#                             below); by default one is installed and wired
+#                             up automatically
+#       --fallback-port PORT  loopback port for the auto-configured fallback
+#                             nginx site (default: 8080)
 #   -h, --help               show this help
 #
 # Re-running this script (e.g. with a newer --version) redeploys the binaries
 # without rotating an already-generated password/API key, unless you pass
 # -p/--password or --api-key explicitly. Re-running with the same --domain is
 # also safe: acme.sh only re-issues when the existing cert is close to expiry.
+#
+# Unless --no-fallback is given, the script also installs nginx (if missing)
+# and a minimal placeholder site listening on 127.0.0.1:<--fallback-port>,
+# then points anytls-server's -fallback at it: connections that fail the
+# anytls auth handshake (e.g. active probing, or a browser just visiting the
+# URL) get transparently forwarded there instead of the connection just
+# closing, so the server looks like an ordinary website to shallow probing.
+# Re-running the script always resets the nginx site config and page content
+# back to the script's defaults, overwriting any manual edits.
 #
 # Requires network access to github.com to download the release archive
 # (and, with --domain, to also fetch acme.sh, and to reach the Cloudflare
@@ -52,8 +66,10 @@ ENABLE_API=1
 VERSION="latest"
 DOMAIN=""
 CF_TOKEN=""
+FALLBACK_ENABLE=1
+FALLBACK_PORT=8080
 
-usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -66,6 +82,8 @@ while [[ $# -gt 0 ]]; do
     --version) VERSION="$2"; shift 2 ;;
     --domain) DOMAIN="$2"; shift 2 ;;
     --cloudflare-token) CF_TOKEN="$2"; shift 2 ;;
+    --no-fallback) FALLBACK_ENABLE=0; shift ;;
+    --fallback-port) FALLBACK_PORT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "未知参数: $1" >&2; usage; exit 1 ;;
   esac
@@ -232,7 +250,103 @@ if [[ -n "$DOMAIN" ]]; then
   rm -rf "$ACME_INSTALLER_DIR"
 fi
 
+# Auto-configure a local nginx site for anytls-server's -fallback: connections
+# that fail the anytls auth handshake (active probing, a browser just
+# visiting the URL, etc.) get forwarded here instead of the connection simply
+# closing. Kept on a loopback-only, non-standard port so it can never collide
+# with an existing public site on the same host. Any failure here (no
+# supported package manager, nginx won't start, port already taken by
+# something else) is a warning, not a fatal error - anytls-server itself
+# still installs and works fine without -fallback.
+FALLBACK_ADDR=""
+FALLBACK_WEB_DIR="$CONF_DIR/fallback-web"
+if [[ "$FALLBACK_ENABLE" -eq 1 ]]; then
+  echo "==> 配置本地 fallback 网站 (nginx, 用于抵御主动探测)"
+  if ! command -v nginx >/dev/null 2>&1; then
+    echo "  未检测到 nginx，尝试自动安装..."
+    if command -v apt-get >/dev/null 2>&1; then
+      DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nginx
+    elif command -v dnf >/dev/null 2>&1; then
+      dnf install -y -q nginx
+    elif command -v yum >/dev/null 2>&1; then
+      yum install -y -q nginx
+    else
+      echo "  警告: 无法识别包管理器，跳过 fallback 自动配置（可手动安装 nginx 后重新运行本脚本，或加 --no-fallback 关闭）" >&2
+    fi
+  fi
+
+  if command -v nginx >/dev/null 2>&1 && [[ -d /etc/nginx/conf.d ]]; then
+    mkdir -p "$FALLBACK_WEB_DIR"
+    cat > "$FALLBACK_WEB_DIR/index.html" <<'HTML'
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Site Maintenance</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f6f7f9;
+    color: #222;
+  }
+  .card {
+    max-width: 32rem;
+    padding: 2.5rem 3rem;
+    text-align: center;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 0.75rem; }
+  p { color: #666; line-height: 1.6; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>We'll be back shortly</h1>
+    <p>This site is undergoing scheduled maintenance. Please check back again soon.</p>
+  </div>
+</body>
+</html>
+HTML
+
+    cat > /etc/nginx/conf.d/anytls-fallback.conf <<EOF
+server {
+    listen 127.0.0.1:$FALLBACK_PORT;
+    server_name _;
+
+    root $FALLBACK_WEB_DIR;
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+}
+EOF
+
+    if nginx -t >/dev/null 2>&1; then
+      systemctl enable nginx >/dev/null 2>&1 || true
+      systemctl restart nginx
+      sleep 1
+      if systemctl is-active --quiet nginx; then
+        FALLBACK_ADDR="127.0.0.1:$FALLBACK_PORT"
+      else
+        echo "  警告: nginx 未能正常启动，跳过 fallback 配置（可能是 --fallback-port $FALLBACK_PORT 已被占用）" >&2
+      fi
+    else
+      echo "  警告: nginx 配置校验失败，跳过 fallback 配置" >&2
+    fi
+  fi
+fi
+
 EXEC_START="$BIN_DIR/anytls-server -l $LISTEN -p $PASSWORD -db $DB_PATH$CERT_ARGS"
+if [[ -n "$FALLBACK_ADDR" ]]; then
+  EXEC_START="$EXEC_START -fallback $FALLBACK_ADDR"
+fi
 if [[ "$ENABLE_API" -eq 1 ]]; then
   EXEC_START="$EXEC_START -api-listen $API_LISTEN -api-key $API_KEY"
 fi
@@ -343,6 +457,12 @@ if [[ "$ENABLE_API" -eq 1 ]]; then
   else
     echo " 管理 API:   http://$API_LISTEN/  (Key: $API_KEY)"
   fi
+fi
+if [[ -n "$FALLBACK_ADDR" ]]; then
+  echo " Fallback:   已启用，认证失败的连接会转发到本机 nginx ($FALLBACK_ADDR)"
+  echo "            页面内容: $FALLBACK_WEB_DIR/index.html（重新运行本脚本会重置为默认内容）"
+else
+  echo " Fallback:   未启用（--no-fallback，或自动配置 nginx 失败，见上方警告）"
 fi
 echo " 用户数据库: $DB_PATH"
 echo " 凭据留存于: $CRED_FILE (重新运行本脚本不会更换密码/Key)"

@@ -42,6 +42,14 @@ command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload || true
 echo "==> 移除二进制文件"
 rm -f "$BIN_DIR/anytls-server" "$BIN_DIR/anytls-client"
 
+if [[ -f /etc/nginx/conf.d/anytls-fallback.conf ]]; then
+  echo "==> 移除 install.sh 自动配置的 fallback nginx 站点"
+  rm -f /etc/nginx/conf.d/anytls-fallback.conf
+  if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet nginx 2>/dev/null; then
+    systemctl reload nginx 2>/dev/null || true
+  fi
+fi
+
 if [[ "$PURGE" -eq 1 ]]; then
   echo "==> 清除用户数据库与凭据 ($DATA_DIR, $CONF_DIR)"
   rm -rf "$DATA_DIR" "$CONF_DIR"
