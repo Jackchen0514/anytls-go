@@ -313,6 +313,11 @@ if [[ "$FALLBACK_ENABLE" -eq 1 ]]; then
 </body>
 </html>
 HTML
+    # mkdir/cat above inherit the `umask 077` set earlier for the credentials
+    # file, which would otherwise leave this directory/file root-only and
+    # unreadable by nginx's unprivileged worker process (403 Forbidden).
+    chmod 755 "$FALLBACK_WEB_DIR"
+    chmod 644 "$FALLBACK_WEB_DIR/index.html"
 
     cat > /etc/nginx/conf.d/anytls-fallback.conf <<EOF
 server {
