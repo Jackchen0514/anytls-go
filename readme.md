@@ -50,6 +50,8 @@
 
 未配置 `-fallback` 时行为不变，认证失败仍直接断开连接。
 
+fallback 目标只需要在本机监听普通 HTTP 即可——anytls-server 自己已经用真实证书完成了 TLS 握手，转发给 fallback 目标的是解密后的明文 HTTP 请求，浏览器/探测端看到的仍然是一次完整、合法的 HTTPS 响应。一个最简单的 nginx + 静态页示例见 [`examples/fallback`](./examples/fallback)。
+
 ### 一键安装（systemd）
 
 `install.sh` / `update.sh` 使用 GitHub Release 上由 CI 交叉编译好的二进制（见 [`.github/workflows/release.yml`](./.github/workflows/release.yml)，`amd64`/`arm64` Linux），下载后校验 `SHA256SUMS` 再安装，**不需要本机安装 Go、也不需要 clone 源码**，只需能访问 github.com：
