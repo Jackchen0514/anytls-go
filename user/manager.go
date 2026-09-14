@@ -2,6 +2,7 @@ package user
 
 import (
 	"crypto/sha256"
+	"math"
 	"sync"
 	"time"
 
@@ -253,11 +254,16 @@ func (st *State) ReleaseConn() {
 	}
 }
 
-// AddTraffic accounts n bytes against the user and reports whether they are now over quota.
+// AddTraffic accounts n raw bytes against the user, scaled by their traffic
+// multiplier, and reports whether they are now over quota.
 func (st *State) AddTraffic(n int64) (overQuota bool) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	st.usedDelta += n
+	mul := st.user.TrafficMultiplier
+	if mul <= 0 {
+		mul = 1.0
+	}
+	st.usedDelta += int64(math.Round(float64(n) * mul))
 	limit := st.user.TrafficLimitBytes
 	if limit <= 0 {
 		return false

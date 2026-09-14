@@ -30,13 +30,14 @@ func (s *Server) view(u *user.User) userView {
 }
 
 type userRequest struct {
-	Username          *string `json:"username"`
-	Password          *string `json:"password"`
-	Enabled           *bool   `json:"enabled"`
-	TrafficLimitBytes *int64  `json:"traffic_limit_bytes"`
-	IPLimit           *int    `json:"ip_limit"`
-	ConnLimit         *int    `json:"conn_limit"`
-	TrafficResetCycle *string `json:"traffic_reset_cycle"`
+	Username          *string  `json:"username"`
+	Password          *string  `json:"password"`
+	Enabled           *bool    `json:"enabled"`
+	TrafficLimitBytes *int64   `json:"traffic_limit_bytes"`
+	TrafficMultiplier *float64 `json:"traffic_multiplier"`
+	IPLimit           *int     `json:"ip_limit"`
+	ConnLimit         *int     `json:"conn_limit"`
+	TrafficResetCycle *string  `json:"traffic_reset_cycle"`
 	// ExpiresAt is RFC3339 (e.g. "2026-12-31T23:59:59Z"), or "" to clear
 	// (never expires).
 	ExpiresAt *string `json:"expires_at"`
@@ -87,6 +88,10 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "traffic_reset_cycle must be one of none|daily|monthly")
 			return
 		}
+		if req.TrafficMultiplier != nil && *req.TrafficMultiplier <= 0 {
+			writeError(w, http.StatusBadRequest, "traffic_multiplier must be greater than 0")
+			return
+		}
 		var expiresAt time.Time
 		if req.ExpiresAt != nil {
 			var err error
@@ -109,6 +114,9 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.TrafficLimitBytes != nil {
 			u.TrafficLimitBytes = *req.TrafficLimitBytes
+		}
+		if req.TrafficMultiplier != nil {
+			u.TrafficMultiplier = *req.TrafficMultiplier
 		}
 		if req.IPLimit != nil {
 			u.IPLimit = *req.IPLimit
@@ -199,6 +207,10 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "traffic_reset_cycle must be one of none|daily|monthly")
 			return
 		}
+		if req.TrafficMultiplier != nil && *req.TrafficMultiplier <= 0 {
+			writeError(w, http.StatusBadRequest, "traffic_multiplier must be greater than 0")
+			return
+		}
 		if req.ExpiresAt != nil {
 			expiresAt, err := parseExpiresAt(*req.ExpiresAt)
 			if err != nil {
@@ -218,6 +230,9 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.TrafficLimitBytes != nil {
 			u.TrafficLimitBytes = *req.TrafficLimitBytes
+		}
+		if req.TrafficMultiplier != nil {
+			u.TrafficMultiplier = *req.TrafficMultiplier
 		}
 		if req.IPLimit != nil {
 			u.IPLimit = *req.IPLimit

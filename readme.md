@@ -130,7 +130,7 @@ sudo bash uninstall.sh --purge  # 同时清除用户数据库、凭据与系统�
 | 方法与路径 | 说明 |
 |--|--|
 | `GET /api/users` | 列出所有用户及其实时用量 |
-| `POST /api/users` | 创建用户，字段：`username`、`password`（必填），`enabled`、`traffic_limit_bytes`、`ip_limit`、`conn_limit`、`traffic_reset_cycle`(`none`/`daily`/`monthly`)、`expires_at`(RFC3339 时间戳，如 `2026-12-31T23:59:59Z`，留空/不传 = 永不过期)（可选） |
+| `POST /api/users` | 创建用户，字段：`username`、`password`（必填），`enabled`、`traffic_limit_bytes`、`traffic_multiplier`（流量倍率，默认 `1.0`，如 `0.9`/`2.0`，用于整体调整该用户流量消耗的计费系数，必须 `> 0`）、`ip_limit`、`conn_limit`、`traffic_reset_cycle`(`none`/`daily`/`monthly`)、`expires_at`(RFC3339 时间戳，如 `2026-12-31T23:59:59Z`，留空/不传 = 永不过期)（可选） |
 | `GET /api/users/{id}` | 查询单个用户及用量 |
 | `PUT /api/users/{id}` | 部分更新用户字段 |
 | `DELETE /api/users/{id}` | 删除用户 |

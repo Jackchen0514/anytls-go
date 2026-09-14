@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS users (
 	traffic_used_bytes INTEGER NOT NULL DEFAULT 0,
 	ip_limit INTEGER NOT NULL DEFAULT 0,
 	conn_limit INTEGER NOT NULL DEFAULT 0,
+	traffic_multiplier REAL NOT NULL DEFAULT 1.0,
 	traffic_reset_cycle TEXT NOT NULL DEFAULT 'none',
 	traffic_reset_at TIMESTAMP,
 	created_at TIMESTAMP NOT NULL,
@@ -47,6 +48,14 @@ CREATE TABLE IF NOT EXISTS users (
 	// no "ADD COLUMN IF NOT EXISTS" guaranteed across versions, so just
 	// attempt it and ignore a "column already exists" failure.
 	if _, err := db.Exec(`ALTER TABLE users ADD COLUMN expires_at TIMESTAMP`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			db.Close()
+			return nil, err
+		}
+	}
+
+	// Migration for databases created before traffic_multiplier existed.
+	if _, err := db.Exec(`ALTER TABLE users ADD COLUMN traffic_multiplier REAL NOT NULL DEFAULT 1.0`); err != nil {
 		if !strings.Contains(err.Error(), "duplicate column name") {
 			db.Close()
 			return nil, err
@@ -67,7 +76,7 @@ func scanUser(row interface {
 	var enabled int
 	var resetAt, expiresAt sql.NullTime
 	err := row.Scan(&u.ID, &u.Username, &u.Password, &enabled,
-		&u.TrafficLimitBytes, &u.TrafficUsedBytes, &u.IPLimit, &u.ConnLimit,
+		&u.TrafficLimitBytes, &u.TrafficUsedBytes, &u.IPLimit, &u.ConnLimit, &u.TrafficMultiplier,
 		&u.TrafficResetCycle, &resetAt, &expiresAt, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -82,7 +91,7 @@ func scanUser(row interface {
 	return &u, nil
 }
 
-const userColumns = `id, username, password, enabled, traffic_limit_bytes, traffic_used_bytes, ip_limit, conn_limit, traffic_reset_cycle, traffic_reset_at, expires_at, created_at, updated_at`
+const userColumns = `id, username, password, enabled, traffic_limit_bytes, traffic_used_bytes, ip_limit, conn_limit, traffic_multiplier, traffic_reset_cycle, traffic_reset_at, expires_at, created_at, updated_at`
 
 func (s *Store) ListUsers() ([]*User, error) {
 	rows, err := s.db.Query(`SELECT ` + userColumns + ` FROM users ORDER BY id`)
@@ -121,12 +130,15 @@ func (s *Store) CreateUser(u *User) (*User, error) {
 	if u.TrafficResetAt.IsZero() {
 		u.TrafficResetAt = nextResetAt(now, u.TrafficResetCycle)
 	}
+	if u.TrafficMultiplier <= 0 {
+		u.TrafficMultiplier = 1.0
+	}
 
 	res, err := s.db.Exec(`INSERT INTO users
-		(username, password, enabled, traffic_limit_bytes, traffic_used_bytes, ip_limit, conn_limit, traffic_reset_cycle, traffic_reset_at, expires_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(username, password, enabled, traffic_limit_bytes, traffic_used_bytes, ip_limit, conn_limit, traffic_multiplier, traffic_reset_cycle, traffic_reset_at, expires_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		u.Username, u.Password, boolToInt(u.Enabled), u.TrafficLimitBytes, u.TrafficUsedBytes,
-		u.IPLimit, u.ConnLimit, string(u.TrafficResetCycle), nullTime(u.TrafficResetAt), nullTime(u.ExpiresAt), u.CreatedAt, u.UpdatedAt)
+		u.IPLimit, u.ConnLimit, u.TrafficMultiplier, string(u.TrafficResetCycle), nullTime(u.TrafficResetAt), nullTime(u.ExpiresAt), u.CreatedAt, u.UpdatedAt)
 	if err != nil {
 		if isUniqueConstraintErr(err) {
 			return nil, ErrDuplicateUsername
@@ -143,12 +155,15 @@ func (s *Store) CreateUser(u *User) (*User, error) {
 
 func (s *Store) UpdateUser(u *User) error {
 	u.UpdatedAt = time.Now()
+	if u.TrafficMultiplier <= 0 {
+		u.TrafficMultiplier = 1.0
+	}
 	res, err := s.db.Exec(`UPDATE users SET
 		username = ?, password = ?, enabled = ?, traffic_limit_bytes = ?, traffic_used_bytes = ?,
-		ip_limit = ?, conn_limit = ?, traffic_reset_cycle = ?, traffic_reset_at = ?, expires_at = ?, updated_at = ?
+		ip_limit = ?, conn_limit = ?, traffic_multiplier = ?, traffic_reset_cycle = ?, traffic_reset_at = ?, expires_at = ?, updated_at = ?
 		WHERE id = ?`,
 		u.Username, u.Password, boolToInt(u.Enabled), u.TrafficLimitBytes, u.TrafficUsedBytes,
-		u.IPLimit, u.ConnLimit, string(u.TrafficResetCycle), nullTime(u.TrafficResetAt), nullTime(u.ExpiresAt), u.UpdatedAt, u.ID)
+		u.IPLimit, u.ConnLimit, u.TrafficMultiplier, string(u.TrafficResetCycle), nullTime(u.TrafficResetAt), nullTime(u.ExpiresAt), u.UpdatedAt, u.ID)
 	if err != nil {
 		if isUniqueConstraintErr(err) {
 			return ErrDuplicateUsername

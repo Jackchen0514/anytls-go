@@ -13,12 +13,16 @@ const (
 
 // User is a single anytls account. Zero-value limits mean "unlimited".
 type User struct {
-	ID                int64      `json:"id"`
-	Username          string     `json:"username"`
-	Password          string     `json:"password"`
-	Enabled           bool       `json:"enabled"`
-	TrafficLimitBytes int64      `json:"traffic_limit_bytes"`
-	TrafficUsedBytes  int64      `json:"traffic_used_bytes"`
+	ID                int64  `json:"id"`
+	Username          string `json:"username"`
+	Password          string `json:"password"`
+	Enabled           bool   `json:"enabled"`
+	TrafficLimitBytes int64  `json:"traffic_limit_bytes"`
+	TrafficUsedBytes  int64  `json:"traffic_used_bytes"`
+	// TrafficMultiplier scales raw transferred bytes before they count against
+	// TrafficUsedBytes/TrafficLimitBytes (e.g. 0.9 discounts usage, 2.0
+	// doubles it). Zero/negative is treated as 1.0 (no adjustment).
+	TrafficMultiplier float64    `json:"traffic_multiplier"`
 	IPLimit           int        `json:"ip_limit"`
 	ConnLimit         int        `json:"conn_limit"`
 	TrafficResetCycle ResetCycle `json:"traffic_reset_cycle"`
