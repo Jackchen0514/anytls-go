@@ -162,7 +162,7 @@
 
 <div id="app" class="wrap" style="display:none;">
   <header>
-    <h1>AnyTLS 用户管理</h1>
+    <h1>AnyTLS 用户管理 <span class="muted" id="versionLabel" style="font-size:12px;font-weight:normal;"></span></h1>
     <button id="logoutBtn">退出登录</button>
   </header>
 
@@ -538,6 +538,17 @@ async function loadServerInfo() {
   }
 }
 
+async function loadVersion() {
+  try {
+    const v = await api('/api/version');
+    let text = 'v' + v.version;
+    if (v.update_available) text += ` (有新版 v${v.latest}，可执行 update.sh 更新)`;
+    $('versionLabel').textContent = text;
+  } catch (e) {
+    // non-fatal: the header just stays without a version label
+  }
+}
+
 $('newUserBtn').onclick = openCreate;
 $('cancelBtn').onclick = () => dialog.close();
 $('refreshBtn').onclick = loadUsers;
@@ -614,6 +625,7 @@ function showApp() {
   $('loginScreen').style.display = 'none';
   $('app').style.display = 'block';
   loadServerInfo();
+  loadVersion();
   if (!pollTimer) {
     pollTimer = setInterval(() => { if (!dialog.open && !qrDialog.open) loadUsers(); }, 5000);
   }

@@ -1,15 +1,74 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"anytls/user"
+	"anytls/util"
 )
+
+// releaseRepo is the GitHub repo release binaries/tags are published under,
+// used to check for a newer version from /api/version.
+const releaseRepo = "Jackchen0514/anytls-go"
+
+type versionResponse struct {
+	Version         string `json:"version"`
+	Latest          string `json:"latest,omitempty"`
+	UpdateAvailable bool   `json:"update_available,omitempty"`
+	CheckError      string `json:"check_error,omitempty"`
+}
+
+// handleVersion reports the running binary's version and, best-effort,
+// the latest version published on GitHub (never fatal if that check fails,
+// e.g. no outbound internet access or GitHub rate limiting).
+func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	resp := versionResponse{Version: util.ProgramVersion}
+	latest, err := latestReleaseVersion(r.Context())
+	if err != nil {
+		resp.CheckError = err.Error()
+	} else {
+		resp.Latest = latest
+		resp.UpdateAvailable = latest != resp.Version
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func latestReleaseVersion(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		"https://api.github.com/repos/"+releaseRepo+"/releases/latest", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("github api returned status %d", resp.StatusCode)
+	}
+	var body struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return "", err
+	}
+	return strings.TrimPrefix(body.TagName, "v"), nil
+}
 
 type userView struct {
 	*user.User

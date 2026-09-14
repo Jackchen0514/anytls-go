@@ -32,6 +32,7 @@ func NewServer(manager *user.Manager, apiKey string, serverAddr string) *Server 
 	apiMux.HandleFunc("/api/users", s.handleUsers)
 	apiMux.HandleFunc("/api/users/", s.handleUserByID)
 	apiMux.HandleFunc("/api/server", s.handleServerInfo)
+	apiMux.HandleFunc("/api/version", s.handleVersion)
 
 	s.root = http.NewServeMux()
 	s.root.Handle("/api/", s.authMiddleware(apiMux))

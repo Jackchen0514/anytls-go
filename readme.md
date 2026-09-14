@@ -135,6 +135,7 @@ sudo bash uninstall.sh --purge  # 同时清除用户数据库、凭据与系统�
 | `PUT /api/users/{id}` | 部分更新用户字段 |
 | `DELETE /api/users/{id}` | 删除用户 |
 | `POST /api/users/{id}/reset-traffic` | 手动重置该用户已用流量 |
+| `GET /api/version` | 查看当前运行版本号，并尝试对比 GitHub 上的最新 release（网络不通时该项静默失败，不影响返回当前版本号） |
 
 ### 示例客户端
 
