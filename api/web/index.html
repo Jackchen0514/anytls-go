@@ -208,10 +208,17 @@
       <input type="checkbox" id="f_enabled" checked>
       <label for="f_enabled" style="margin:0;">启用</label>
     </div>
-    <div class="field">
-      <label>流量限制 (GB，0 = 不限)</label>
-      <input id="f_traffic" type="number" min="0" step="0.1" value="0">
+    <div class="field-row">
+      <div class="field">
+        <label>流量限制 (GB，0 = 不限)</label>
+        <input id="f_traffic" type="number" min="0" step="0.1" value="0">
+      </div>
+      <div class="field">
+        <label>流量倍率</label>
+        <input id="f_multiplier" type="number" min="0.01" step="0.1" value="1">
+      </div>
     </div>
+    <p class="hint">按此系数折算已用流量，如 0.9 打九折、2.0 计双倍，默认 1</p>
     <div class="field-row">
       <div class="field">
         <label>IP 数限制 (0 = 不限)</label>
@@ -311,15 +318,16 @@ function fmtBytes(n) {
   return v.toFixed(v >= 100 || i === 0 ? 0 : 1) + ' ' + units[i];
 }
 
-function meter(used, limit) {
+function meter(used, limit, multiplier) {
+  const mulLabel = (multiplier && multiplier !== 1) ? ` <span class="muted">(×${multiplier})</span>` : '';
   if (!limit || limit <= 0) {
-    return `<div class="meter"><div class="label">${fmtBytes(used)} / 不限</div></div>`;
+    return `<div class="meter"><div class="label">${fmtBytes(used)} / 不限${mulLabel}</div></div>`;
   }
   const pct = Math.min(100, (used / limit) * 100);
   const cls = pct >= 100 ? 'over' : (pct >= 80 ? 'warn' : '');
   return `<div class="meter">
     <div class="bar"><div class="fill ${cls}" style="width:${pct}%"></div></div>
-    <div class="label">${fmtBytes(used)} / ${fmtBytes(limit)}</div>
+    <div class="label">${fmtBytes(used)} / ${fmtBytes(limit)}${mulLabel}</div>
   </div>`;
 }
 
@@ -355,7 +363,7 @@ function render() {
     tr.innerHTML = `
       <td><strong>${escapeHtml(u.username)}</strong></td>
       <td><span class="badge ${u.enabled ? 'on' : 'off'}">${u.enabled ? '启用' : '禁用'}</span></td>
-      <td>${meter(usage.traffic_used_bytes || 0, u.traffic_limit_bytes || 0)}</td>
+      <td>${meter(usage.traffic_used_bytes || 0, u.traffic_limit_bytes || 0, u.traffic_multiplier)}</td>
       <td>${countLabel(usage.active_ips || 0, u.ip_limit || 0)}</td>
       <td>${countLabel(usage.active_conns || 0, u.conn_limit || 0)}</td>
       <td class="muted">${resetLabel(u.traffic_reset_cycle)}</td>
@@ -423,6 +431,7 @@ function openCreate() {
   $('f_password_hint').textContent = '连接密码，第三方客户端使用此密码接入';
   $('f_enabled').checked = true;
   $('f_traffic').value = 0;
+  $('f_multiplier').value = 1;
   $('f_ip').value = 0;
   $('f_conn').value = 0;
   $('f_reset').value = 'none';
@@ -440,6 +449,7 @@ function openEdit(u) {
   $('f_password_hint').textContent = '留空则不修改密码';
   $('f_enabled').checked = !!u.enabled;
   $('f_traffic').value = u.traffic_limit_bytes ? +(u.traffic_limit_bytes / GB).toFixed(3) : 0;
+  $('f_multiplier').value = u.traffic_multiplier || 1;
   $('f_ip').value = u.ip_limit || 0;
   $('f_conn').value = u.conn_limit || 0;
   $('f_reset').value = u.traffic_reset_cycle || 'none';
@@ -539,6 +549,7 @@ $('form').addEventListener('submit', async (e) => {
     username: $('f_username').value.trim(),
     enabled: $('f_enabled').checked,
     traffic_limit_bytes: Math.round(parseFloat($('f_traffic').value || 0) * GB),
+    traffic_multiplier: parseFloat($('f_multiplier').value || 1),
     ip_limit: parseInt($('f_ip').value || 0, 10),
     conn_limit: parseInt($('f_conn').value || 0, 10),
     traffic_reset_cycle: $('f_reset').value,
