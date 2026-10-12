@@ -771,14 +771,41 @@ function renderGroupList() {
     row.innerHTML = `
       <div>
         <div class="host">${escapeHtml(g.name)}${isDirect ? ' <span class="muted">(内置)</span>' : ''}</div>
-        <div class="meta">${isDirect ? '不经过任何代理，直连目标地址' : escapeHtml(g.socks5_url)}</div>
+        <div class="meta" data-role="meta">${isDirect ? '不经过任何代理，直连目标地址' : escapeHtml(g.socks5_url)}</div>
       </div>
-      <div>${isDirect ? '' : '<button type="button" class="small" data-act="edit">编辑</button> <button type="button" class="small danger" data-act="delete">删除</button>'}</div>`;
+      <div>
+        <button type="button" class="small" data-act="test">测试连通性</button>
+        ${isDirect ? '' : '<button type="button" class="small" data-act="edit">编辑</button> <button type="button" class="small danger" data-act="delete">删除</button>'}
+      </div>`;
+    row.querySelector('[data-act=test]').onclick = () => testGroup(g, row);
     if (!isDirect) {
       row.querySelector('[data-act=edit]').onclick = () => startEditGroup(g);
       row.querySelector('[data-act=delete]').onclick = () => deleteGroup(g);
     }
     el.appendChild(row);
+  }
+}
+
+async function testGroup(g, row) {
+  const btn = row.querySelector('[data-act=test]');
+  const meta = row.querySelector('[data-role=meta]');
+  const originalMeta = meta.textContent;
+  btn.disabled = true;
+  btn.textContent = '测试中…';
+  try {
+    const result = await api('/api/outbound-groups/' + g.id + '/test', {method: 'POST', body: JSON.stringify({})});
+    if (result.success) {
+      meta.innerHTML = `${escapeHtml(originalMeta)} <span style="color:var(--ok);">· 连通正常 (${result.latency_ms}ms)</span>`;
+      toast(`${g.name}: 连通正常，延迟 ${result.latency_ms}ms`);
+    } else {
+      meta.innerHTML = `${escapeHtml(originalMeta)} <span style="color:var(--danger);">· 连接失败</span>`;
+      toast(`${g.name}: 连接失败 - ${result.error}`, true);
+    }
+  } catch (e) {
+    if (e.message !== 'unauthorized') toast('测试失败: ' + e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '测试连通性';
   }
 }
 

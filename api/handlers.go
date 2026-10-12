@@ -13,6 +13,8 @@ import (
 	"anytls/proxy"
 	"anytls/user"
 	"anytls/util"
+
+	M "github.com/sagernet/sing/common/metadata"
 )
 
 // releaseRepo is the GitHub repo release binaries/tags are published under,
@@ -148,12 +150,30 @@ func (s *Server) handleOutboundGroups(w http.ResponseWriter, r *http.Request) {
 //	DELETE /api/outbound-groups/{id} - delete; any user assigned to it
 //	                                    reverts to the direct group
 func (s *Server) handleOutboundGroupByID(w http.ResponseWriter, r *http.Request) {
-	idStr := strings.TrimPrefix(r.URL.Path, "/api/outbound-groups/")
-	id, err := strconv.ParseInt(strings.Trim(idStr, "/"), 10, 64)
+	rest := strings.TrimPrefix(r.URL.Path, "/api/outbound-groups/")
+	parts := strings.Split(strings.Trim(rest, "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	id, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid group id")
 		return
 	}
+
+	if len(parts) == 2 && parts[1] == "test" {
+		// Unlike PUT/DELETE below, testing the built-in direct group (id 0)
+		// is allowed and expected - it's the whole point of letting an
+		// admin check "can this server reach the internet at all".
+		s.handleOutboundGroupTest(w, r, id)
+		return
+	}
+	if len(parts) != 1 {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
 	if id == user.DirectGroupID {
 		writeError(w, http.StatusBadRequest, "the direct group is built-in and can't be modified")
 		return
@@ -214,6 +234,69 @@ func respondGroupErr(w http.ResponseWriter, err error) {
 		return
 	}
 	writeError(w, http.StatusInternalServerError, err.Error())
+}
+
+// defaultConnectivityTestTarget is dialed when a test request doesn't name
+// its own target: Cloudflare's anycast IP, globally reachable and reached
+// by plain IP so the test measures outbound TCP connectivity itself,
+// without also depending on DNS resolution (through the chain or
+// otherwise) succeeding.
+const defaultConnectivityTestTarget = "1.1.1.1:443"
+
+type groupTestRequest struct {
+	Target string `json:"target"`
+}
+
+// handleOutboundGroupTest does a plain TCP connect through groupID's
+// dialer (DirectGroupID included) to req.Target, or
+// defaultConnectivityTestTarget if that's empty, reporting whether it
+// connected and how long that took. Never itself an error response just
+// because the dial failed - a failed dial is the expected, useful answer
+// to "is this outbound reachable," not a server error.
+func (s *Server) handleOutboundGroupTest(w http.ResponseWriter, r *http.Request, groupID int64) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if groupID != user.DirectGroupID {
+		if _, err := s.manager.GetOutboundGroup(groupID); err != nil {
+			respondGroupErr(w, err)
+			return
+		}
+	}
+
+	var req groupTestRequest
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+	}
+	target := strings.TrimSpace(req.Target)
+	if target == "" {
+		target = defaultConnectivityTestTarget
+	}
+	dest := M.ParseSocksaddr(target)
+	if !dest.IsValid() || dest.Port == 0 {
+		writeError(w, http.StatusBadRequest, "target must be host:port")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	conn, err := proxy.DialerForGroup(groupID).DialContext(ctx, "tcp", dest)
+	resp := map[string]any{"target": target}
+	if err != nil {
+		resp["success"] = false
+		resp["error"] = err.Error()
+	} else {
+		conn.Close()
+		resp["success"] = true
+		resp["latency_ms"] = time.Since(start).Milliseconds()
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) view(u *user.User) userView {
