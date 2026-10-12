@@ -16,8 +16,10 @@ var baseOutboundDialer N.Dialer = &N.DefaultDialer{Dialer: net.Dialer{Timeout: 5
 
 // OutboundDialer performs every outbound TCP/UDP connection anytls-server
 // makes to a client's requested destination. It defaults to dialing
-// directly; call SetChainSOCKS5 once at startup to relay all of it through
-// an upstream SOCKS5 server instead.
+// directly; call SetChainSOCKS5 to relay all of it through an upstream
+// SOCKS5 server instead (at startup via -chain-socks5, or later via the
+// admin API/web panel - safe to swap at any time, read fresh on every new
+// connection).
 var OutboundDialer N.Dialer = baseOutboundDialer
 
 // SetChainSOCKS5 reconfigures OutboundDialer to relay every outbound
@@ -26,8 +28,13 @@ var OutboundDialer N.Dialer = baseOutboundDialer
 func SetChainSOCKS5(rawURL string) error {
 	client, err := socks.NewClientFromURL(baseOutboundDialer, rawURL)
 	if err != nil {
-		return fmt.Errorf("parse -chain-socks5: %w", err)
+		return fmt.Errorf("invalid chain-socks5 url: %w", err)
 	}
 	OutboundDialer = client
 	return nil
+}
+
+// ClearChainSOCKS5 reverts OutboundDialer to dialing destinations directly.
+func ClearChainSOCKS5() {
+	OutboundDialer = baseOutboundDialer
 }

@@ -85,6 +85,19 @@ CREATE TABLE IF NOT EXISTS user_visit_history (
 		return nil, err
 	}
 
+	// Generic key/value store for server-wide settings (e.g. the SOCKS5
+	// chain-proxy URL) that are configurable at runtime via the admin API,
+	// not tied to any one user.
+	if _, err := db.Exec(`
+CREATE TABLE IF NOT EXISTS server_settings (
+	key TEXT PRIMARY KEY,
+	value TEXT NOT NULL,
+	updated_at TIMESTAMP NOT NULL
+)`); err != nil {
+		db.Close()
+		return nil, err
+	}
+
 	return &Store{db: db}, nil
 }
 
@@ -348,6 +361,30 @@ func (s *Store) ResetTraffic(id int64) error {
 	u.TrafficUsedBytes = 0
 	u.TrafficResetAt = nextResetAt(now, u.TrafficResetCycle)
 	return s.UpdateUser(u)
+}
+
+// GetSetting returns a server-wide setting's value, and whether it was set
+// at all (vs. never written).
+func (s *Store) GetSetting(key string) (value string, ok bool, err error) {
+	err = s.db.QueryRow(`SELECT value FROM server_settings WHERE key = ?`, key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return value, true, nil
+}
+
+// SetSetting upserts a server-wide setting. An empty value is still stored
+// (distinct from never having called this) so e.g. explicitly clearing the
+// chain-proxy URL via the admin API is remembered as "explicitly off"
+// rather than falling back to a startup flag on the next restart.
+func (s *Store) SetSetting(key, value string) error {
+	_, err := s.db.Exec(`INSERT INTO server_settings (key, value, updated_at) VALUES (?, ?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+		key, value, time.Now())
+	return err
 }
 
 func boolToInt(b bool) int {

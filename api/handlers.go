@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"anytls/proxy"
 	"anytls/user"
 	"anytls/util"
 )
@@ -81,6 +82,53 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"listen": s.serverAddr})
+}
+
+type chainSOCKS5Request struct {
+	URL string `json:"url"`
+}
+
+// handleChainSOCKS5 manages the server-wide SOCKS5 chain-proxy setting
+// (relaying all outbound traffic through an upstream SOCKS5 server instead
+// of dialing destinations directly):
+//
+//	GET -> {"url": "...", "enabled": bool}
+//	PUT -> body {"url": "host:port" | "socks5://user:pass@host:port" | ""}
+//	       (empty clears it, reverting to direct dialing). Applied
+//	       immediately - no restart needed - and persisted so it survives one.
+func (s *Server) handleChainSOCKS5(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		url, err := s.manager.GetChainSOCKS5()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"url": url, "enabled": url != ""})
+
+	case http.MethodPut:
+		var req chainSOCKS5Request
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.URL != "" {
+			if err := proxy.SetChainSOCKS5(req.URL); err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		} else {
+			proxy.ClearChainSOCKS5()
+		}
+		if err := s.manager.SetChainSOCKS5(req.URL); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"url": req.URL, "enabled": req.URL != ""})
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
 }
 
 func (s *Server) view(u *user.User) userView {

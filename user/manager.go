@@ -537,3 +537,21 @@ func (m *Manager) UserCount() int {
 	defer m.mu.RUnlock()
 	return len(m.byID)
 }
+
+// settingChainSOCKS5 is the server_settings key for the SOCKS5 chain-proxy
+// URL, persisted so it survives restarts and can be managed from the admin
+// API/web panel instead of only the -chain-socks5 startup flag.
+const settingChainSOCKS5 = "chain_socks5"
+
+// GetChainSOCKS5 returns the persisted chain-proxy URL ("" if never set/cleared).
+func (m *Manager) GetChainSOCKS5() (string, error) {
+	value, _, err := m.store.GetSetting(settingChainSOCKS5)
+	return value, err
+}
+
+// SetChainSOCKS5 persists url ("" to record it as explicitly cleared) as
+// the chain-proxy setting. Does not itself touch the live dialer - callers
+// apply that separately via proxy.SetChainSOCKS5/ClearChainSOCKS5.
+func (m *Manager) SetChainSOCKS5(url string) error {
+	return m.store.SetSetting(settingChainSOCKS5, url)
+}

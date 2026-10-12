@@ -37,16 +37,6 @@ func main() {
 	if (*certFile == "") != (*keyFile == "") {
 		logrus.Fatalln("-cert and -key must be set together")
 	}
-	if *chainSocks5 != "" {
-		if err := proxy.SetChainSOCKS5(*chainSocks5); err != nil {
-			logrus.Fatalln(err)
-		}
-		logTarget := *chainSocks5
-		if i := strings.LastIndex(logTarget, "@"); i != -1 {
-			logTarget = "***@" + logTarget[i+1:] // don't put the socks5 credentials in the log
-		}
-		logrus.Infoln("[Server] chaining all outbound traffic through SOCKS5 server:", logTarget)
-	}
 
 	store, err := user.OpenStore(*dbPath)
 	if err != nil {
@@ -56,6 +46,32 @@ func main() {
 	userManager, err := user.NewManager(store)
 	if err != nil {
 		logrus.Fatalln("init user manager:", err)
+	}
+
+	// -chain-socks5, if given, always wins over whatever was last saved via
+	// the admin API/web panel, and is persisted so the panel reflects
+	// reality and a later restart without the flag keeps using it. If the
+	// flag is empty, fall back to the persisted setting (if any) so a
+	// panel-configured chain proxy survives a restart with no flag at all.
+	chainURL := *chainSocks5
+	if chainURL != "" {
+		if err := userManager.SetChainSOCKS5(chainURL); err != nil {
+			logrus.Fatalln("persist chain-socks5 setting:", err)
+		}
+	} else if saved, err := userManager.GetChainSOCKS5(); err != nil {
+		logrus.Fatalln("load chain-socks5 setting:", err)
+	} else {
+		chainURL = saved
+	}
+	if chainURL != "" {
+		if err := proxy.SetChainSOCKS5(chainURL); err != nil {
+			logrus.Fatalln(err)
+		}
+		logTarget := chainURL
+		if i := strings.LastIndex(logTarget, "@"); i != -1 {
+			logTarget = "***@" + logTarget[i+1:] // don't put the socks5 credentials in the log
+		}
+		logrus.Infoln("[Server] chaining all outbound traffic through SOCKS5 server:", logTarget)
 	}
 
 	if *password != "" && userManager.UserCount() == 0 {
