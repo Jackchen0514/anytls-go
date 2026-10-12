@@ -1,6 +1,7 @@
 package main
 
 import (
+	"anytls/proxy"
 	"anytls/proxy/padding"
 	"anytls/proxy/session"
 	"anytls/user"
@@ -132,11 +133,12 @@ func handleTcpConnection(ctx context.Context, c net.Conn, s *myServer) {
 		}
 
 		conn := &countingConn{Stream: stream, state: userState}
+		dialer := proxy.DialerForGroup(userState.OutboundGroupID())
 
 		if isUoT {
-			proxyOutboundUoT(ctx, conn, destination)
+			proxyOutboundUoT(ctx, conn, destination, dialer)
 		} else {
-			proxyOutboundTCP(ctx, conn, destination)
+			proxyOutboundTCP(ctx, conn, destination, dialer)
 		}
 	}, &padding.DefaultPaddingFactory)
 	sess.Run()

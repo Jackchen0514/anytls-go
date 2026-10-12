@@ -1,7 +1,6 @@
 package main
 
 import (
-	"anytls/proxy"
 	"context"
 	"net"
 
@@ -13,8 +12,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-func proxyOutboundTCP(ctx context.Context, conn net.Conn, destination M.Socksaddr) error {
-	c, err := proxy.OutboundDialer.DialContext(ctx, "tcp", destination)
+func proxyOutboundTCP(ctx context.Context, conn net.Conn, destination M.Socksaddr, dialer N.Dialer) error {
+	c, err := dialer.DialContext(ctx, "tcp", destination)
 	if err != nil {
 		logrus.Debugln("proxyOutboundTCP DialContext:", err)
 		err = E.Errors(err, N.ReportHandshakeFailure(conn, err))
@@ -29,14 +28,14 @@ func proxyOutboundTCP(ctx context.Context, conn net.Conn, destination M.Socksadd
 	return bufio.CopyConn(ctx, conn, c)
 }
 
-func proxyOutboundUoT(ctx context.Context, conn net.Conn, destination M.Socksaddr) error {
+func proxyOutboundUoT(ctx context.Context, conn net.Conn, destination M.Socksaddr, dialer N.Dialer) error {
 	request, err := uot.ReadRequest(conn)
 	if err != nil {
 		logrus.Debugln("proxyOutboundUoT ReadRequest:", err)
 		return err
 	}
 
-	c, err := proxy.OutboundDialer.ListenPacket(ctx, request.Destination)
+	c, err := dialer.ListenPacket(ctx, request.Destination)
 	if err != nil {
 		logrus.Debugln("proxyOutboundUoT ListenPacket:", err)
 		err = E.Errors(err, N.ReportHandshakeFailure(conn, err))

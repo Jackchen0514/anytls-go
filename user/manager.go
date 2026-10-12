@@ -378,6 +378,14 @@ func (st *State) ID() int64 {
 	return st.user.ID
 }
 
+// OutboundGroupID reports which outbound group (DirectGroupID or an
+// OutboundGroup.ID) this user's proxied connections should dial through.
+func (st *State) OutboundGroupID() int64 {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.user.OutboundGroupID
+}
+
 // --- Admin operations (CRUD), delegated to Store and reflected in memory ---
 
 func (m *Manager) ListUsers() ([]*User, error) {
@@ -538,20 +546,30 @@ func (m *Manager) UserCount() int {
 	return len(m.byID)
 }
 
-// settingChainSOCKS5 is the server_settings key for the SOCKS5 chain-proxy
-// URL, persisted so it survives restarts and can be managed from the admin
-// API/web panel instead of only the -chain-socks5 startup flag.
-const settingChainSOCKS5 = "chain_socks5"
-
-// GetChainSOCKS5 returns the persisted chain-proxy URL ("" if never set/cleared).
-func (m *Manager) GetChainSOCKS5() (string, error) {
-	value, _, err := m.store.GetSetting(settingChainSOCKS5)
-	return value, err
+// ListOutboundGroups returns every outbound group (not including the
+// built-in DirectGroupID).
+func (m *Manager) ListOutboundGroups() ([]*OutboundGroup, error) {
+	return m.store.ListOutboundGroups()
 }
 
-// SetChainSOCKS5 persists url ("" to record it as explicitly cleared) as
-// the chain-proxy setting. Does not itself touch the live dialer - callers
-// apply that separately via proxy.SetChainSOCKS5/ClearChainSOCKS5.
-func (m *Manager) SetChainSOCKS5(url string) error {
-	return m.store.SetSetting(settingChainSOCKS5, url)
+func (m *Manager) GetOutboundGroup(id int64) (*OutboundGroup, error) {
+	return m.store.GetOutboundGroup(id)
+}
+
+func (m *Manager) CreateOutboundGroup(g *OutboundGroup) (*OutboundGroup, error) {
+	return m.store.CreateOutboundGroup(g)
+}
+
+func (m *Manager) UpdateOutboundGroup(g *OutboundGroup) error {
+	return m.store.UpdateOutboundGroup(g)
+}
+
+// DeleteOutboundGroup removes a group and reloads, so any user that was
+// assigned to it (now reset to DirectGroupID by the store) picks up the
+// change immediately.
+func (m *Manager) DeleteOutboundGroup(id int64) error {
+	if err := m.store.DeleteOutboundGroup(id); err != nil {
+		return err
+	}
+	return m.reload()
 }

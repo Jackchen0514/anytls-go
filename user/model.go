@@ -41,6 +41,26 @@ type User struct {
 	// caller explicitly loaded it (Manager.GetUser/ListUsers do;
 	// Store.GetUser/ListUsers alone do not).
 	BlockedDomains []string `json:"blocked_domains,omitempty"`
+	// OutboundGroupID selects which outbound this user's traffic dials
+	// through: DirectGroupID (0, the built-in "direct" group - always
+	// valid, never stored as a row) or the ID of an OutboundGroup.
+	OutboundGroupID int64 `json:"outbound_group_id"`
+}
+
+// DirectGroupID is the built-in outbound group every user defaults to:
+// dial destinations directly, no chain proxy. Unlike other groups it's
+// never stored as an OutboundGroup row and can't be deleted.
+const DirectGroupID int64 = 0
+
+// OutboundGroup is a named outbound path proxied connections can be routed
+// through, other than dialing directly: currently always a SOCKS5 server.
+// Users are assigned to one via User.OutboundGroupID.
+type OutboundGroup struct {
+	ID        int64     `json:"id"`
+	Name      string    `json:"name"`
+	SOCKS5URL string    `json:"socks5_url"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // VisitRecord is one deduplicated entry in a user's recent visit history:

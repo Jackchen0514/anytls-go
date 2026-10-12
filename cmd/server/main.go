@@ -28,7 +28,6 @@ func main() {
 	certFile := flag.String("cert", "", "TLS certificate file (PEM); requires -key. Falls back to a generated self-signed cert if unset")
 	keyFile := flag.String("key", "", "TLS private key file (PEM); requires -cert")
 	fallbackAddr := flag.String("fallback", "", "local address to forward connections to when the anytls auth handshake fails, e.g. 127.0.0.1:80 (connection is just closed if unset)")
-	chainSocks5 := flag.String("chain-socks5", "", "relay all outbound traffic through an upstream SOCKS5 server instead of connecting directly, e.g. 127.0.0.1:1080 or socks5://user:pass@host:port (disabled if empty)")
 	flag.Parse()
 
 	if *apiListen != "" && *apiKey == "" {
@@ -48,30 +47,27 @@ func main() {
 		logrus.Fatalln("init user manager:", err)
 	}
 
-	// -chain-socks5, if given, always wins over whatever was last saved via
-	// the admin API/web panel, and is persisted so the panel reflects
-	// reality and a later restart without the flag keeps using it. If the
-	// flag is empty, fall back to the persisted setting (if any) so a
-	// panel-configured chain proxy survives a restart with no flag at all.
-	chainURL := *chainSocks5
-	if chainURL != "" {
-		if err := userManager.SetChainSOCKS5(chainURL); err != nil {
-			logrus.Fatalln("persist chain-socks5 setting:", err)
-		}
-	} else if saved, err := userManager.GetChainSOCKS5(); err != nil {
-		logrus.Fatalln("load chain-socks5 setting:", err)
-	} else {
-		chainURL = saved
+	// Outbound groups (direct dialing plus any configured SOCKS5 chain
+	// proxies, managed via the admin API/web panel) are persisted in the
+	// user database; register each one's live dialer before accepting any
+	// connections. A group's URL was already validated when it was
+	// created/updated, so a failure here means the DB row is corrupt -
+	// log and skip it (falls back to direct for that group) rather than
+	// refusing to start the whole server over one bad group.
+	groups, err := userManager.ListOutboundGroups()
+	if err != nil {
+		logrus.Fatalln("load outbound groups:", err)
 	}
-	if chainURL != "" {
-		if err := proxy.SetChainSOCKS5(chainURL); err != nil {
-			logrus.Fatalln(err)
+	for _, g := range groups {
+		if err := proxy.SetGroupSOCKS5(g.ID, g.SOCKS5URL); err != nil {
+			logrus.Errorln("[Server] outbound group", g.Name, "has an invalid socks5_url, falling back to direct for it:", err)
+			continue
 		}
-		logTarget := chainURL
+		logTarget := g.SOCKS5URL
 		if i := strings.LastIndex(logTarget, "@"); i != -1 {
 			logTarget = "***@" + logTarget[i+1:] // don't put the socks5 credentials in the log
 		}
-		logrus.Infoln("[Server] chaining all outbound traffic through SOCKS5 server:", logTarget)
+		logrus.Infoln("[Server] outbound group", g.Name, "chains through SOCKS5 server:", logTarget)
 	}
 
 	if *password != "" && userManager.UserCount() == 0 {

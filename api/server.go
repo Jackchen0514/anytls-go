@@ -33,7 +33,8 @@ func NewServer(manager *user.Manager, apiKey string, serverAddr string) *Server 
 	apiMux.HandleFunc("/api/users/", s.handleUserByID)
 	apiMux.HandleFunc("/api/server", s.handleServerInfo)
 	apiMux.HandleFunc("/api/version", s.handleVersion)
-	apiMux.HandleFunc("/api/settings/chain-socks5", s.handleChainSOCKS5)
+	apiMux.HandleFunc("/api/outbound-groups", s.handleOutboundGroups)
+	apiMux.HandleFunc("/api/outbound-groups/", s.handleOutboundGroupByID)
 
 	s.root = http.NewServeMux()
 	s.root.Handle("/api/", s.authMiddleware(apiMux))

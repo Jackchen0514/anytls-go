@@ -54,18 +54,22 @@ fallback 目标只需要在本机监听普通 HTTP 即可——anytls-server 自
 
 用 `install.sh` 部署时这一套默认会自动配置好（见下文），不需要手动照着这个示例操作；只有不通过 `install.sh`、自己跑二进制/写 systemd 单元时才需要手动参考这个示例。
 
-### SOCKS5 链式代理
+### 出口分组 / SOCKS5 链式代理
 
-默认情况下 anytls-server 直连客户端请求的目标地址。加上 `-chain-socks5` 参数后，所有出站流量（TCP 与 UDP-over-TCP）都会改为经由一个上游 SOCKS5 服务器转发：
+默认情况下每个用户都走「直连」出口（`anytls-server` 直连客户端请求的目标地址）。管理网页工具栏的「出口分组」里可以新建任意数量的链式代理分组（各自配置一个上游 SOCKS5 地址），然后在每个用户的编辑页为其单独指定走哪个出口——不同用户可以同时使用不同的出口，互不影响：
 
 ```
-./anytls-server -l 0.0.0.0:8443 -p 密码 -chain-socks5 127.0.0.1:1080
-./anytls-server -l 0.0.0.0:8443 -p 密码 -chain-socks5 socks5://user:pass@1.2.3.4:1080
+分组列表：
+  直连（内置，不可删除）
+  链式代1  socks5_url = 127.0.0.1:1080
+  链式代2  socks5_url = socks5://user:pass@1.2.3.4:1080
+
+用户 alice -> 直连
+用户 bob   -> 链式代1
+用户 carol -> 链式代2
 ```
 
-不带协议头的 `host:port` 视为无认证的 SOCKS5；需要用户名密码认证时用 `socks5://user:pass@host:port` 的形式。未配置 `-chain-socks5` 时行为不变，直连目标地址。
-
-也可以不用命令行参数，直接在管理网页上点「链式代理设置」配置（见下文管理 API 一节），改动立即生效、无需重启，并会持久化保存，下次启动（即使不带 `-chain-socks5`）会自动继续使用。命令行的 `-chain-socks5` 优先级更高：只要启动时带了这个参数，就会覆盖并顶替网页上保存的设置。
+创建/修改分组的 `socks5_url` 不带协议头的 `host:port` 视为无认证的 SOCKS5；需要用户名密码认证时用 `socks5://user:pass@host:port` 的形式。新建/修改/删除分组都立即生效、无需重启，且持久化保存（重启后自动恢复）；删除一个分组后，原先指派给它的用户会自动改回直连。
 
 `install.sh` / `update.sh` 使用 GitHub Release 上由 CI 交叉编译好的二进制（见 [`.github/workflows/release.yml`](./.github/workflows/release.yml)，`amd64`/`arm64` Linux），下载后校验 `SHA256SUMS` 再安装，**不需要本机安装 Go、也不需要 clone 源码**，只需能访问 github.com：
 
@@ -132,7 +136,7 @@ sudo bash uninstall.sh --purge  # 同时清除用户数据库、凭据与系统�
 - `-api-listen` 管理 API 监听地址，留空则不启动管理 API。
 - `-api-key` 管理 API 所需的静态密钥（`Authorization: Bearer <key>`），启用 `-api-listen` 时必填。
 
-启用 `-api-listen` 后，访问 `http://<api-listen>/`（如 `http://127.0.0.1:8080/`）即可打开内置的简易管理网页。首次访问会显示登录页，输入 API Key 校验通过后才能看到用户列表；登录状态保存在浏览器本地，可随时点击「退出登录」清除。登录后可创建/编辑/删除用户，查看实时流量与 IP/连接数用量，并手动重置流量；每个用户可设置到期日期（留空为永不过期），到期后自动拒绝连接；每个用户可点击「订阅」查看连接链接与二维码（客户端扫码即可导入），二维码在浏览器本地生成，无需联网；每个用户可点击「访问记录」查看最近访问过的去重域名/IP 列表，并可从记录里一键加入屏蔽；页面右上角工具栏的「链式代理设置」可开关并配置全局 SOCKS5 链式代理。首次打开会用当前访问管理页的地址猜测服务器地址，若通过 SSH 隧道等方式访问、猜测的地址不对，可在弹窗里手动改成服务器真实可连接的地址（会记住，下次自动带出）。该页面外壳本身无需鉴权即可加载，登录态验证与之后的所有数据请求都由浏览器带着你输入的 Key 向 `-api-key` 校验，故仍应只在受信网络中开放此端口，或用反向代理加一层访问控制。
+启用 `-api-listen` 后，访问 `http://<api-listen>/`（如 `http://127.0.0.1:8080/`）即可打开内置的简易管理网页。首次访问会显示登录页，输入 API Key 校验通过后才能看到用户列表；登录状态保存在浏览器本地，可随时点击「退出登录」清除。登录后可创建/编辑/删除用户，查看实时流量与 IP/连接数用量，并手动重置流量；每个用户可设置到期日期（留空为永不过期），到期后自动拒绝连接；每个用户可点击「订阅」查看连接链接与二维码（客户端扫码即可导入），二维码在浏览器本地生成，无需联网；每个用户可点击「访问记录」查看最近访问过的去重域名/IP 列表，并可从记录里一键加入屏蔽；每个用户可在编辑页的「出口分组」里选择走直连还是某个 SOCKS5 链式代理分组，分组本身在工具栏的「出口分组」里统一管理（新建/编辑/删除）。首次打开会用当前访问管理页的地址猜测服务器地址，若通过 SSH 隧道等方式访问、猜测的地址不对，可在弹窗里手动改成服务器真实可连接的地址（会记住，下次自动带出）。该页面外壳本身无需鉴权即可加载，登录态验证与之后的所有数据请求都由浏览器带着你输入的 Key 向 `-api-key` 校验，故仍应只在受信网络中开放此端口，或用反向代理加一层访问控制。
 
 用户超出流量/IP 数/连接数限制、或账号已到期后，服务器会拒绝其新建的流/连接（已限流的用户的存量会话中，新的代理流也会被立即拒绝，账号到期后已打开的会话也会在下一次读写时被主动断开）。
 
@@ -145,7 +149,7 @@ sudo bash uninstall.sh --purge  # 同时清除用户数据库、凭据与系统�
 | 方法与路径 | 说明 |
 |--|--|
 | `GET /api/users` | 列出所有用户及其实时用量 |
-| `POST /api/users` | 创建用户，字段：`username`、`password`（必填），`enabled`、`traffic_limit_bytes`、`traffic_multiplier`（流量倍率，默认 `1.0`，如 `0.9`/`2.0`，用于整体调整该用户流量消耗的计费系数，必须 `> 0`）、`ip_limit`、`conn_limit`、`traffic_reset_cycle`(`none`/`daily`/`monthly`)、`expires_at`(RFC3339 时间戳，如 `2026-12-31T23:59:59Z`，留空/不传 = 永不过期)（可选） |
+| `POST /api/users` | 创建用户，字段：`username`、`password`（必填），`enabled`、`traffic_limit_bytes`、`traffic_multiplier`（流量倍率，默认 `1.0`，如 `0.9`/`2.0`，用于整体调整该用户流量消耗的计费系数，必须 `> 0`）、`ip_limit`、`conn_limit`、`traffic_reset_cycle`(`none`/`daily`/`monthly`)、`expires_at`(RFC3339 时间戳，如 `2026-12-31T23:59:59Z`，留空/不传 = 永不过期)、`outbound_group_id`（出口分组 id，`0` = 直连，默认 `0`，见下文出口分组一节）（可选） |
 | `GET /api/users/{id}` | 查询单个用户及用量 |
 | `PUT /api/users/{id}` | 部分更新用户字段 |
 | `DELETE /api/users/{id}` | 删除用户 |
@@ -156,8 +160,10 @@ sudo bash uninstall.sh --purge  # 同时清除用户数据库、凭据与系统�
 | `GET /api/users/{id}/visit-history` | 查看该用户最近访问的去重域名/IP 列表（含最后访问时间与访问时所用的客户端 IP，按时间倒序） |
 | `DELETE /api/users/{id}/visit-history` | 清空该用户的访问记录 |
 | `GET /api/version` | 查看当前运行版本号，并尝试对比 GitHub 上的最新 release（网络不通时该项静默失败，不影响返回当前版本号） |
-| `GET /api/settings/chain-socks5` | 查看当前 SOCKS5 链式代理设置：`{"url": "...", "enabled": bool}` |
-| `PUT /api/settings/chain-socks5` | 配置/关闭 SOCKS5 链式代理，字段：`url`（`host:port` 或 `socks5://user:pass@host:port`，传空字符串表示关闭）。立即生效并持久化，全局对所有用户生效 |
+| `GET /api/outbound-groups` | 列出所有出口分组，含内置的「直连」（`id: 0`） |
+| `POST /api/outbound-groups` | 新建一个链式代理分组，字段：`name`、`socks5_url`（均必填，`host:port` 或 `socks5://user:pass@host:port`）。立即生效并持久化 |
+| `PUT /api/outbound-groups/{id}` | 修改分组名称/地址（`id: 0` 内置直连分组不可修改） |
+| `DELETE /api/outbound-groups/{id}` | 删除分组，原先指派给它的用户自动改回直连 |
 
 ### 示例客户端
 

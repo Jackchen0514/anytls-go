@@ -11,6 +11,8 @@ import (
 
 var ErrNotFound = errors.New("user: not found")
 var ErrDuplicateUsername = errors.New("user: duplicate username")
+var ErrGroupNotFound = errors.New("user: outbound group not found")
+var ErrDuplicateGroupName = errors.New("user: outbound group name already exists")
 
 type Store struct {
 	db *sql.DB
@@ -85,13 +87,20 @@ CREATE TABLE IF NOT EXISTS user_visit_history (
 		return nil, err
 	}
 
-	// Generic key/value store for server-wide settings (e.g. the SOCKS5
-	// chain-proxy URL) that are configurable at runtime via the admin API,
-	// not tied to any one user.
+	// Migration for databases created before outbound_group_id existed.
+	if _, err := db.Exec(`ALTER TABLE users ADD COLUMN outbound_group_id INTEGER NOT NULL DEFAULT 0`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			db.Close()
+			return nil, err
+		}
+	}
+
 	if _, err := db.Exec(`
-CREATE TABLE IF NOT EXISTS server_settings (
-	key TEXT PRIMARY KEY,
-	value TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS outbound_groups (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	name TEXT NOT NULL UNIQUE,
+	socks5_url TEXT NOT NULL,
+	created_at TIMESTAMP NOT NULL,
 	updated_at TIMESTAMP NOT NULL
 )`); err != nil {
 		db.Close()
@@ -113,7 +122,7 @@ func scanUser(row interface {
 	var resetAt, expiresAt sql.NullTime
 	err := row.Scan(&u.ID, &u.Username, &u.Password, &enabled,
 		&u.TrafficLimitBytes, &u.TrafficUsedBytes, &u.IPLimit, &u.ConnLimit, &u.TrafficMultiplier,
-		&u.TrafficResetCycle, &resetAt, &expiresAt, &u.CreatedAt, &u.UpdatedAt)
+		&u.TrafficResetCycle, &resetAt, &expiresAt, &u.CreatedAt, &u.UpdatedAt, &u.OutboundGroupID)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +136,7 @@ func scanUser(row interface {
 	return &u, nil
 }
 
-const userColumns = `id, username, password, enabled, traffic_limit_bytes, traffic_used_bytes, ip_limit, conn_limit, traffic_multiplier, traffic_reset_cycle, traffic_reset_at, expires_at, created_at, updated_at`
+const userColumns = `id, username, password, enabled, traffic_limit_bytes, traffic_used_bytes, ip_limit, conn_limit, traffic_multiplier, traffic_reset_cycle, traffic_reset_at, expires_at, created_at, updated_at, outbound_group_id`
 
 func (s *Store) ListUsers() ([]*User, error) {
 	rows, err := s.db.Query(`SELECT ` + userColumns + ` FROM users ORDER BY id`)
@@ -171,10 +180,10 @@ func (s *Store) CreateUser(u *User) (*User, error) {
 	}
 
 	res, err := s.db.Exec(`INSERT INTO users
-		(username, password, enabled, traffic_limit_bytes, traffic_used_bytes, ip_limit, conn_limit, traffic_multiplier, traffic_reset_cycle, traffic_reset_at, expires_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(username, password, enabled, traffic_limit_bytes, traffic_used_bytes, ip_limit, conn_limit, traffic_multiplier, traffic_reset_cycle, traffic_reset_at, expires_at, created_at, updated_at, outbound_group_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		u.Username, u.Password, boolToInt(u.Enabled), u.TrafficLimitBytes, u.TrafficUsedBytes,
-		u.IPLimit, u.ConnLimit, u.TrafficMultiplier, string(u.TrafficResetCycle), nullTime(u.TrafficResetAt), nullTime(u.ExpiresAt), u.CreatedAt, u.UpdatedAt)
+		u.IPLimit, u.ConnLimit, u.TrafficMultiplier, string(u.TrafficResetCycle), nullTime(u.TrafficResetAt), nullTime(u.ExpiresAt), u.CreatedAt, u.UpdatedAt, u.OutboundGroupID)
 	if err != nil {
 		if isUniqueConstraintErr(err) {
 			return nil, ErrDuplicateUsername
@@ -196,10 +205,10 @@ func (s *Store) UpdateUser(u *User) error {
 	}
 	res, err := s.db.Exec(`UPDATE users SET
 		username = ?, password = ?, enabled = ?, traffic_limit_bytes = ?, traffic_used_bytes = ?,
-		ip_limit = ?, conn_limit = ?, traffic_multiplier = ?, traffic_reset_cycle = ?, traffic_reset_at = ?, expires_at = ?, updated_at = ?
+		ip_limit = ?, conn_limit = ?, traffic_multiplier = ?, traffic_reset_cycle = ?, traffic_reset_at = ?, expires_at = ?, updated_at = ?, outbound_group_id = ?
 		WHERE id = ?`,
 		u.Username, u.Password, boolToInt(u.Enabled), u.TrafficLimitBytes, u.TrafficUsedBytes,
-		u.IPLimit, u.ConnLimit, u.TrafficMultiplier, string(u.TrafficResetCycle), nullTime(u.TrafficResetAt), nullTime(u.ExpiresAt), u.UpdatedAt, u.ID)
+		u.IPLimit, u.ConnLimit, u.TrafficMultiplier, string(u.TrafficResetCycle), nullTime(u.TrafficResetAt), nullTime(u.ExpiresAt), u.UpdatedAt, u.OutboundGroupID, u.ID)
 	if err != nil {
 		if isUniqueConstraintErr(err) {
 			return ErrDuplicateUsername
@@ -363,28 +372,112 @@ func (s *Store) ResetTraffic(id int64) error {
 	return s.UpdateUser(u)
 }
 
-// GetSetting returns a server-wide setting's value, and whether it was set
-// at all (vs. never written).
-func (s *Store) GetSetting(key string) (value string, ok bool, err error) {
-	err = s.db.QueryRow(`SELECT value FROM server_settings WHERE key = ?`, key).Scan(&value)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, nil
-	}
+func scanOutboundGroup(row interface {
+	Scan(dest ...any) error
+}) (*OutboundGroup, error) {
+	var g OutboundGroup
+	err := row.Scan(&g.ID, &g.Name, &g.SOCKS5URL, &g.CreatedAt, &g.UpdatedAt)
 	if err != nil {
-		return "", false, err
+		return nil, err
 	}
-	return value, true, nil
+	return &g, nil
 }
 
-// SetSetting upserts a server-wide setting. An empty value is still stored
-// (distinct from never having called this) so e.g. explicitly clearing the
-// chain-proxy URL via the admin API is remembered as "explicitly off"
-// rather than falling back to a startup flag on the next restart.
-func (s *Store) SetSetting(key, value string) error {
-	_, err := s.db.Exec(`INSERT INTO server_settings (key, value, updated_at) VALUES (?, ?, ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-		key, value, time.Now())
-	return err
+const outboundGroupColumns = `id, name, socks5_url, created_at, updated_at`
+
+// ListOutboundGroups returns every outbound group (not including the
+// built-in DirectGroupID, which is never a row).
+func (s *Store) ListOutboundGroups() ([]*OutboundGroup, error) {
+	rows, err := s.db.Query(`SELECT ` + outboundGroupColumns + ` FROM outbound_groups ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var groups []*OutboundGroup
+	for rows.Next() {
+		g, err := scanOutboundGroup(rows)
+		if err != nil {
+			return nil, err
+		}
+		groups = append(groups, g)
+	}
+	return groups, rows.Err()
+}
+
+func (s *Store) GetOutboundGroup(id int64) (*OutboundGroup, error) {
+	row := s.db.QueryRow(`SELECT `+outboundGroupColumns+` FROM outbound_groups WHERE id = ?`, id)
+	g, err := scanOutboundGroup(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrGroupNotFound
+	}
+	return g, err
+}
+
+func (s *Store) CreateOutboundGroup(g *OutboundGroup) (*OutboundGroup, error) {
+	now := time.Now()
+	g.CreatedAt = now
+	g.UpdatedAt = now
+	res, err := s.db.Exec(`INSERT INTO outbound_groups (name, socks5_url, created_at, updated_at) VALUES (?, ?, ?, ?)`,
+		g.Name, g.SOCKS5URL, g.CreatedAt, g.UpdatedAt)
+	if err != nil {
+		if isUniqueConstraintErr(err) {
+			return nil, ErrDuplicateGroupName
+		}
+		return nil, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	g.ID = id
+	return g, nil
+}
+
+func (s *Store) UpdateOutboundGroup(g *OutboundGroup) error {
+	g.UpdatedAt = time.Now()
+	res, err := s.db.Exec(`UPDATE outbound_groups SET name = ?, socks5_url = ?, updated_at = ? WHERE id = ?`,
+		g.Name, g.SOCKS5URL, g.UpdatedAt, g.ID)
+	if err != nil {
+		if isUniqueConstraintErr(err) {
+			return ErrDuplicateGroupName
+		}
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrGroupNotFound
+	}
+	return nil
+}
+
+// DeleteOutboundGroup removes a group and resets any user assigned to it
+// back to DirectGroupID, so no user is left pointing at a nonexistent group.
+func (s *Store) DeleteOutboundGroup(id int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`UPDATE users SET outbound_group_id = 0 WHERE outbound_group_id = ?`, id); err != nil {
+		return err
+	}
+	res, err := tx.Exec(`DELETE FROM outbound_groups WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrGroupNotFound
+	}
+	return tx.Commit()
 }
 
 func boolToInt(b bool) int {

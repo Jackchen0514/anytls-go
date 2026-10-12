@@ -84,51 +84,136 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"listen": s.serverAddr})
 }
 
-type chainSOCKS5Request struct {
-	URL string `json:"url"`
+// directGroupView is the synthetic row representing user.DirectGroupID,
+// prepended to every /api/outbound-groups listing so clients (the web
+// panel's dropdown in particular) don't need to special-case "no group."
+var directGroupView = &user.OutboundGroup{ID: user.DirectGroupID, Name: "直连"}
+
+type outboundGroupRequest struct {
+	Name      *string `json:"name"`
+	SOCKS5URL *string `json:"socks5_url"`
 }
 
-// handleChainSOCKS5 manages the server-wide SOCKS5 chain-proxy setting
-// (relaying all outbound traffic through an upstream SOCKS5 server instead
-// of dialing destinations directly):
+// handleOutboundGroups routes:
 //
-//	GET -> {"url": "...", "enabled": bool}
-//	PUT -> body {"url": "host:port" | "socks5://user:pass@host:port" | ""}
-//	       (empty clears it, reverting to direct dialing). Applied
-//	       immediately - no restart needed - and persisted so it survives one.
-func (s *Server) handleChainSOCKS5(w http.ResponseWriter, r *http.Request) {
+//	GET  /api/outbound-groups - list all groups, direct group first
+//	POST /api/outbound-groups - create one, fields: name, socks5_url (both required)
+func (s *Server) handleOutboundGroups(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		url, err := s.manager.GetChainSOCKS5()
+		groups, err := s.manager.ListOutboundGroups()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"url": url, "enabled": url != ""})
+		views := make([]*user.OutboundGroup, 0, len(groups)+1)
+		views = append(views, directGroupView)
+		views = append(views, groups...)
+		writeJSON(w, http.StatusOK, views)
 
-	case http.MethodPut:
-		var req chainSOCKS5Request
+	case http.MethodPost:
+		var req outboundGroupRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
-		if req.URL != "" {
-			if err := proxy.SetChainSOCKS5(req.URL); err != nil {
-				writeError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-		} else {
-			proxy.ClearChainSOCKS5()
-		}
-		if err := s.manager.SetChainSOCKS5(req.URL); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+		if req.Name == nil || *req.Name == "" || req.SOCKS5URL == nil || *req.SOCKS5URL == "" {
+			writeError(w, http.StatusBadRequest, "name and socks5_url are required")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"url": req.URL, "enabled": req.URL != ""})
+		created, err := s.manager.CreateOutboundGroup(&user.OutboundGroup{Name: *req.Name, SOCKS5URL: *req.SOCKS5URL})
+		if err != nil {
+			respondGroupErr(w, err)
+			return
+		}
+		if err := proxy.SetGroupSOCKS5(created.ID, created.SOCKS5URL); err != nil {
+			// socks5_url is already persisted at this point; if it somehow
+			// fails to apply live, the group still loads correctly (direct
+			// fallback) and can be fixed with a PUT, so this isn't fatal to
+			// the request - but it would be surprising for the caller not
+			// to know, so report it rather than silently returning 201.
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, created)
 
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// handleOutboundGroupByID routes:
+//
+//	PUT    /api/outbound-groups/{id} - update name and/or socks5_url
+//	DELETE /api/outbound-groups/{id} - delete; any user assigned to it
+//	                                    reverts to the direct group
+func (s *Server) handleOutboundGroupByID(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/outbound-groups/")
+	id, err := strconv.ParseInt(strings.Trim(idStr, "/"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid group id")
+		return
+	}
+	if id == user.DirectGroupID {
+		writeError(w, http.StatusBadRequest, "the direct group is built-in and can't be modified")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPut:
+		g, err := s.manager.GetOutboundGroup(id)
+		if err != nil {
+			respondGroupErr(w, err)
+			return
+		}
+		var req outboundGroupRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.Name != nil {
+			g.Name = *req.Name
+		}
+		if req.SOCKS5URL != nil {
+			g.SOCKS5URL = *req.SOCKS5URL
+		}
+		if g.Name == "" || g.SOCKS5URL == "" {
+			writeError(w, http.StatusBadRequest, "name and socks5_url are required")
+			return
+		}
+		if err := s.manager.UpdateOutboundGroup(g); err != nil {
+			respondGroupErr(w, err)
+			return
+		}
+		if err := proxy.SetGroupSOCKS5(g.ID, g.SOCKS5URL); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, g)
+
+	case http.MethodDelete:
+		if err := s.manager.DeleteOutboundGroup(id); err != nil {
+			respondGroupErr(w, err)
+			return
+		}
+		proxy.RemoveGroup(id)
+		w.WriteHeader(http.StatusNoContent)
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func respondGroupErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, user.ErrGroupNotFound) {
+		writeError(w, http.StatusNotFound, "outbound group not found")
+		return
+	}
+	if errors.Is(err, user.ErrDuplicateGroupName) {
+		writeError(w, http.StatusConflict, "outbound group name already exists")
+		return
+	}
+	writeError(w, http.StatusInternalServerError, err.Error())
 }
 
 func (s *Server) view(u *user.User) userView {
@@ -148,6 +233,19 @@ type userRequest struct {
 	// ExpiresAt is RFC3339 (e.g. "2026-12-31T23:59:59Z"), or "" to clear
 	// (never expires).
 	ExpiresAt *string `json:"expires_at"`
+	// OutboundGroupID selects which outbound this user's traffic dials
+	// through: user.DirectGroupID (0) or an existing OutboundGroup's ID.
+	OutboundGroupID *int64 `json:"outbound_group_id"`
+}
+
+// validOutboundGroup reports whether id is the direct group or an existing
+// OutboundGroup.
+func (s *Server) validOutboundGroup(id int64) bool {
+	if id == user.DirectGroupID {
+		return true
+	}
+	_, err := s.manager.GetOutboundGroup(id)
+	return err == nil
 }
 
 func validResetCycle(c string) bool {
@@ -199,6 +297,10 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "traffic_multiplier must be greater than 0")
 			return
 		}
+		if req.OutboundGroupID != nil && !s.validOutboundGroup(*req.OutboundGroupID) {
+			writeError(w, http.StatusBadRequest, "outbound_group_id must be 0 (direct) or an existing outbound group id")
+			return
+		}
 		var expiresAt time.Time
 		if req.ExpiresAt != nil {
 			var err error
@@ -233,6 +335,9 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.TrafficResetCycle != nil {
 			u.TrafficResetCycle = user.ResetCycle(*req.TrafficResetCycle)
+		}
+		if req.OutboundGroupID != nil {
+			u.OutboundGroupID = *req.OutboundGroupID
 		}
 
 		created, err := s.manager.CreateUser(u)
@@ -331,6 +436,10 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "traffic_multiplier must be greater than 0")
 			return
 		}
+		if req.OutboundGroupID != nil && !s.validOutboundGroup(*req.OutboundGroupID) {
+			writeError(w, http.StatusBadRequest, "outbound_group_id must be 0 (direct) or an existing outbound group id")
+			return
+		}
 		if req.ExpiresAt != nil {
 			expiresAt, err := parseExpiresAt(*req.ExpiresAt)
 			if err != nil {
@@ -362,6 +471,9 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.TrafficResetCycle != nil {
 			u.TrafficResetCycle = user.ResetCycle(*req.TrafficResetCycle)
+		}
+		if req.OutboundGroupID != nil {
+			u.OutboundGroupID = *req.OutboundGroupID
 		}
 		if err := s.manager.UpdateUser(u); err != nil {
 			respondStoreErr(w, err)

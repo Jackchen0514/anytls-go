@@ -187,7 +187,7 @@
   <div class="toolbar">
     <button class="primary" id="newUserBtn">+ 新建用户</button>
     <button id="refreshBtn">刷新</button>
-    <button id="chainBtn">链式代理设置</button>
+    <button id="groupBtn">出口分组</button>
   </div>
 
   <div class="panel">
@@ -201,6 +201,7 @@
           <th>连接</th>
           <th>重置周期</th>
           <th>到期时间</th>
+          <th>出口</th>
           <th></th>
         </tr>
       </thead>
@@ -260,6 +261,10 @@
       <label>到期日期（留空 = 永不过期）</label>
       <input id="f_expires" type="date">
     </div>
+    <div class="field">
+      <label>出口分组</label>
+      <select id="f_group"></select>
+    </div>
     <div class="field" id="domainBlockSection" style="display:none;">
       <label>屏蔽域名 / 泛域名 / IP / CIDR</label>
       <div id="domainList" class="chip-list"></div>
@@ -307,23 +312,26 @@
   </div>
 </dialog>
 
-<dialog id="chainDialog" style="width:min(420px, 92vw);">
-  <form method="dialog" class="dialog-inner" id="chainForm">
-    <h2>SOCKS5 链式代理</h2>
-    <p class="hint" style="margin-top:-8px;">开启后，服务器的所有出站流量（代理到各个目标站点的连接）都会改为经由下面这个上游 SOCKS5 服务器转发，而不是直连目标地址。对所有用户全局生效，立即应用，无需重启。</p>
-    <div class="check-field">
-      <input type="checkbox" id="chain_enabled">
-      <label for="chain_enabled" style="margin:0;">启用链式代理</label>
-    </div>
-    <div class="field">
-      <label>上游 SOCKS5 地址</label>
-      <input id="chain_url" placeholder="127.0.0.1:1080 或 socks5://user:pass@host:port" autocomplete="off">
+<dialog id="groupDialog" style="width:min(460px, 92vw);">
+  <div class="dialog-inner">
+    <h2>出口分组</h2>
+    <p class="hint" style="margin-top:-8px;">每个用户可在编辑页选择走哪个出口：直连，或经由某个上游 SOCKS5 服务器转发。改动立即生效，无需重启；删除分组后，使用该分组的用户自动改回直连。</p>
+    <div id="groupList" style="max-height:30vh;overflow-y:auto;margin-bottom:14px;"></div>
+    <div class="field-row">
+      <div class="field">
+        <label>分组名称</label>
+        <input id="g_name" autocomplete="off">
+      </div>
+      <div class="field">
+        <label>上游 SOCKS5 地址</label>
+        <input id="g_url" placeholder="host:port 或 socks5://user:pass@host:port" autocomplete="off">
+      </div>
     </div>
     <div class="dialog-actions">
-      <button type="button" id="chainCancelBtn">取消</button>
-      <button type="submit" class="primary" id="chainSaveBtn">保存</button>
+      <button type="button" id="groupCloseBtn">关闭</button>
+      <button type="button" class="primary" id="groupSaveBtn">+ 添加分组</button>
     </div>
-  </form>
+  </div>
 </dialog>
 
 <div id="toast"></div>
@@ -334,7 +342,7 @@ const $ = (id) => document.getElementById(id);
 const dialog = $('dialog');
 const qrDialog = $('qrDialog');
 const historyDialog = $('historyDialog');
-const chainDialog = $('chainDialog');
+const groupDialog = $('groupDialog');
 const GB = 1024 ** 3;
 let serverPort = '';
 
@@ -430,6 +438,7 @@ function render() {
       <td>${countLabel(usage.active_conns || 0, u.conn_limit || 0)}</td>
       <td class="muted">${resetLabel(u.traffic_reset_cycle)}</td>
       <td>${expiresLabel(u)}</td>
+      <td class="muted">${escapeHtml(groupName(u.outbound_group_id || 0))}</td>
       <td class="actions">
         <button class="small" data-act="edit">编辑</button>
         <button class="small" data-act="qr">订阅</button>
@@ -501,6 +510,7 @@ function openCreate() {
   $('f_conn').value = 0;
   $('f_reset').value = 'none';
   $('f_expires').value = '';
+  populateGroupSelect(0);
   $('domainBlockSection').style.display = 'none';
   dialog.showModal();
 }
@@ -521,6 +531,7 @@ function openEdit(u) {
   $('f_conn').value = u.conn_limit || 0;
   $('f_reset').value = u.traffic_reset_cycle || 'none';
   $('f_expires').value = isoToDateInput(u.expires_at);
+  populateGroupSelect(u.outbound_group_id || 0);
   $('domainBlockSection').style.display = 'block';
   $('f_domain_new').value = '';
   renderDomainList(u.blocked_domains || []);
@@ -719,38 +730,114 @@ $('historyClearBtn').onclick = async () => {
   }
 };
 
-// --- Chain proxy settings ---
+// --- Outbound groups ---
 
-async function openChainSettings() {
-  $('chain_enabled').checked = false;
-  $('chain_url').value = '';
+let groups = [{id: 0, name: '直连', socks5_url: ''}];
+let editingGroupId = null;
+
+async function loadGroups() {
   try {
-    const settings = await api('/api/settings/chain-socks5');
-    $('chain_enabled').checked = !!settings.enabled;
-    $('chain_url').value = settings.url || '';
+    groups = await api('/api/outbound-groups');
   } catch (e) {
-    if (e.message !== 'unauthorized') toast('加载链式代理设置失败: ' + e.message, true);
+    if (e.message !== 'unauthorized') toast('加载出口分组失败: ' + e.message, true);
   }
-  chainDialog.showModal();
 }
 
-$('chainCancelBtn').onclick = () => chainDialog.close();
+function groupName(id) {
+  const g = groups.find((g) => g.id === id);
+  return g ? g.name : '直连';
+}
 
-$('chainForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const url = $('chain_enabled').checked ? $('chain_url').value.trim() : '';
-  if ($('chain_enabled').checked && !url) {
-    toast('请填写上游 SOCKS5 地址', true);
-    return;
+// Fills #f_group's options from the cached groups list and selects selectedId.
+function populateGroupSelect(selectedId) {
+  const sel = $('f_group');
+  sel.innerHTML = '';
+  for (const g of groups) {
+    const opt = document.createElement('option');
+    opt.value = g.id;
+    opt.textContent = g.id === 0 ? g.name : `${g.name} (链式代理)`;
+    sel.appendChild(opt);
   }
+  sel.value = selectedId;
+}
+
+function renderGroupList() {
+  const el = $('groupList');
+  el.innerHTML = '';
+  for (const g of groups) {
+    const isDirect = g.id === 0;
+    const row = document.createElement('div');
+    row.className = 'history-row';
+    row.innerHTML = `
+      <div>
+        <div class="host">${escapeHtml(g.name)}${isDirect ? ' <span class="muted">(内置)</span>' : ''}</div>
+        <div class="meta">${isDirect ? '不经过任何代理，直连目标地址' : escapeHtml(g.socks5_url)}</div>
+      </div>
+      <div>${isDirect ? '' : '<button type="button" class="small" data-act="edit">编辑</button> <button type="button" class="small danger" data-act="delete">删除</button>'}</div>`;
+    if (!isDirect) {
+      row.querySelector('[data-act=edit]').onclick = () => startEditGroup(g);
+      row.querySelector('[data-act=delete]').onclick = () => deleteGroup(g);
+    }
+    el.appendChild(row);
+  }
+}
+
+function resetGroupForm() {
+  editingGroupId = null;
+  $('g_name').value = '';
+  $('g_url').value = '';
+  $('groupSaveBtn').textContent = '+ 添加分组';
+}
+
+function startEditGroup(g) {
+  editingGroupId = g.id;
+  $('g_name').value = g.name;
+  $('g_url').value = g.socks5_url;
+  $('groupSaveBtn').textContent = '保存修改';
+}
+
+async function openGroupDialog() {
+  resetGroupForm();
+  await loadGroups();
+  renderGroupList();
+  groupDialog.showModal();
+}
+
+$('groupSaveBtn').onclick = async () => {
+  const name = $('g_name').value.trim();
+  const socks5_url = $('g_url').value.trim();
+  if (!name || !socks5_url) { toast('请填写分组名称和 SOCKS5 地址', true); return; }
   try {
-    await api('/api/settings/chain-socks5', {method: 'PUT', body: JSON.stringify({url})});
-    toast(url ? '已启用链式代理' : '已关闭链式代理');
-    chainDialog.close();
+    if (editingGroupId) {
+      await api('/api/outbound-groups/' + editingGroupId, {method: 'PUT', body: JSON.stringify({name, socks5_url})});
+      toast('已保存');
+    } else {
+      await api('/api/outbound-groups', {method: 'POST', body: JSON.stringify({name, socks5_url})});
+      toast('已添加');
+    }
+    resetGroupForm();
+    await loadGroups();
+    renderGroupList();
+    loadUsers();
   } catch (e) {
     if (e.message !== 'unauthorized') toast('保存失败: ' + e.message, true);
   }
-});
+};
+
+async function deleteGroup(g) {
+  if (!confirm(`确定删除分组 "${g.name}" 吗？使用该分组的用户会自动改回直连。`)) return;
+  try {
+    await api('/api/outbound-groups/' + g.id, {method: 'DELETE'});
+    toast('已删除');
+    await loadGroups();
+    renderGroupList();
+    loadUsers();
+  } catch (e) {
+    if (e.message !== 'unauthorized') toast('删除失败: ' + e.message, true);
+  }
+}
+
+$('groupCloseBtn').onclick = () => groupDialog.close();
 
 async function loadServerInfo() {
   try {
@@ -775,7 +862,7 @@ async function loadVersion() {
 $('newUserBtn').onclick = openCreate;
 $('cancelBtn').onclick = () => dialog.close();
 $('refreshBtn').onclick = loadUsers;
-$('chainBtn').onclick = openChainSettings;
+$('groupBtn').onclick = openGroupDialog;
 
 $('form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -789,6 +876,7 @@ $('form').addEventListener('submit', async (e) => {
     conn_limit: parseInt($('f_conn').value || 0, 10),
     traffic_reset_cycle: $('f_reset').value,
     expires_at: dateInputToIso($('f_expires').value),
+    outbound_group_id: parseInt($('f_group').value || 0, 10),
   };
   const pw = $('f_password').value;
   if (pw || !id) payload.password = pw;
@@ -850,8 +938,9 @@ function showApp() {
   $('app').style.display = 'block';
   loadServerInfo();
   loadVersion();
+  loadGroups();
   if (!pollTimer) {
-    pollTimer = setInterval(() => { if (!dialog.open && !qrDialog.open && !historyDialog.open && !chainDialog.open) loadUsers(); }, 5000);
+    pollTimer = setInterval(() => { if (!dialog.open && !qrDialog.open && !historyDialog.open && !groupDialog.open) loadUsers(); }, 5000);
   }
 }
 
