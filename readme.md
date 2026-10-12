@@ -54,7 +54,16 @@ fallback 目标只需要在本机监听普通 HTTP 即可——anytls-server 自
 
 用 `install.sh` 部署时这一套默认会自动配置好（见下文），不需要手动照着这个示例操作；只有不通过 `install.sh`、自己跑二进制/写 systemd 单元时才需要手动参考这个示例。
 
-### 一键安装（systemd）
+### SOCKS5 链式代理
+
+默认情况下 anytls-server 直连客户端请求的目标地址。加上 `-chain-socks5` 参数后，所有出站流量（TCP 与 UDP-over-TCP）都会改为经由一个上游 SOCKS5 服务器转发：
+
+```
+./anytls-server -l 0.0.0.0:8443 -p 密码 -chain-socks5 127.0.0.1:1080
+./anytls-server -l 0.0.0.0:8443 -p 密码 -chain-socks5 socks5://user:pass@1.2.3.4:1080
+```
+
+不带协议头的 `host:port` 视为无认证的 SOCKS5；需要用户名密码认证时用 `socks5://user:pass@host:port` 的形式。未配置 `-chain-socks5` 时行为不变，直连目标地址。
 
 `install.sh` / `update.sh` 使用 GitHub Release 上由 CI 交叉编译好的二进制（见 [`.github/workflows/release.yml`](./.github/workflows/release.yml)，`amd64`/`arm64` Linux），下载后校验 `SHA256SUMS` 再安装，**不需要本机安装 Go、也不需要 clone 源码**，只需能访问 github.com：
 

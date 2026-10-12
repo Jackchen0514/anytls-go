@@ -14,7 +14,7 @@ import (
 )
 
 func proxyOutboundTCP(ctx context.Context, conn net.Conn, destination M.Socksaddr) error {
-	c, err := proxy.SystemDialer.DialContext(ctx, "tcp", destination.String())
+	c, err := proxy.OutboundDialer.DialContext(ctx, "tcp", destination)
 	if err != nil {
 		logrus.Debugln("proxyOutboundTCP DialContext:", err)
 		err = E.Errors(err, N.ReportHandshakeFailure(conn, err))
@@ -36,7 +36,7 @@ func proxyOutboundUoT(ctx context.Context, conn net.Conn, destination M.Socksadd
 		return err
 	}
 
-	c, err := net.ListenPacket("udp", "")
+	c, err := proxy.OutboundDialer.ListenPacket(ctx, request.Destination)
 	if err != nil {
 		logrus.Debugln("proxyOutboundUoT ListenPacket:", err)
 		err = E.Errors(err, N.ReportHandshakeFailure(conn, err))

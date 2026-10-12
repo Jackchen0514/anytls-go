@@ -2,6 +2,7 @@ package main
 
 import (
 	"anytls/api"
+	"anytls/proxy"
 	"anytls/proxy/padding"
 	"anytls/user"
 	"anytls/util"
@@ -11,6 +12,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -26,6 +28,7 @@ func main() {
 	certFile := flag.String("cert", "", "TLS certificate file (PEM); requires -key. Falls back to a generated self-signed cert if unset")
 	keyFile := flag.String("key", "", "TLS private key file (PEM); requires -cert")
 	fallbackAddr := flag.String("fallback", "", "local address to forward connections to when the anytls auth handshake fails, e.g. 127.0.0.1:80 (connection is just closed if unset)")
+	chainSocks5 := flag.String("chain-socks5", "", "relay all outbound traffic through an upstream SOCKS5 server instead of connecting directly, e.g. 127.0.0.1:1080 or socks5://user:pass@host:port (disabled if empty)")
 	flag.Parse()
 
 	if *apiListen != "" && *apiKey == "" {
@@ -33,6 +36,16 @@ func main() {
 	}
 	if (*certFile == "") != (*keyFile == "") {
 		logrus.Fatalln("-cert and -key must be set together")
+	}
+	if *chainSocks5 != "" {
+		if err := proxy.SetChainSOCKS5(*chainSocks5); err != nil {
+			logrus.Fatalln(err)
+		}
+		logTarget := *chainSocks5
+		if i := strings.LastIndex(logTarget, "@"); i != -1 {
+			logTarget = "***@" + logTarget[i+1:] // don't put the socks5 credentials in the log
+		}
+		logrus.Infoln("[Server] chaining all outbound traffic through SOCKS5 server:", logTarget)
 	}
 
 	store, err := user.OpenStore(*dbPath)
