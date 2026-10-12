@@ -113,8 +113,13 @@ func handleTcpConnection(ctx context.Context, c net.Conn, s *myServer) {
 			logrus.Debugln("ReadAddrPort:", err)
 			return
 		}
-		if destination.IsFqdn() && userState.IsDomainBlocked(destination.Fqdn) {
-			logrus.Debugln("user domain blocked, rejecting stream:", userState.Username(), destination.Fqdn)
+		if destination.IsFqdn() {
+			if userState.IsDomainBlocked(destination.Fqdn) {
+				logrus.Debugln("user domain blocked, rejecting stream:", userState.Username(), destination.Fqdn)
+				return
+			}
+		} else if destination.Addr.IsValid() && userState.IsIPBlocked(destination.Addr) {
+			logrus.Debugln("user IP blocked, rejecting stream:", userState.Username(), destination.Addr)
 			return
 		}
 

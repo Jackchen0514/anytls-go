@@ -125,7 +125,7 @@ sudo bash uninstall.sh --purge  # 同时清除用户数据库、凭据与系统�
 
 用户超出流量/IP 数/连接数限制、或账号已到期后，服务器会拒绝其新建的流/连接（已限流的用户的存量会话中，新的代理流也会被立即拒绝，账号到期后已打开的会话也会在下一次读写时被主动断开）。
 
-每个用户还可设置屏蔽的域名/泛域名（如 `example.com` 或 `*.example.com`，泛域名屏蔽所有子域名但不含裸域名本身），命中屏蔽规则的代理流会被直接拒绝。该功能仅对客户端以域名方式发起的连接生效（SOCKS5 的 `Fqdn` 地址类型）——若客户端自行把域名解析为 IP 后再连接，服务器拿到的就只是一个 IP，无法按域名匹配屏蔽。
+每个用户还可设置屏蔽规则，支持四种写法：域名（`example.com`）、泛域名（`*.example.com`，屏蔽所有子域名但不含裸域名本身）、精确 IP（`203.0.113.1`）、CIDR 网段（`10.0.0.0/8`），命中任一规则的代理流都会被直接拒绝。域名/泛域名规则仅对客户端以域名方式发起的连接生效（SOCKS5 的 `Fqdn` 地址类型）；IP/CIDR 规则仅对客户端以 IP 方式发起的连接生效——也就是说，若客户端把域名自行解析为 IP 后再连接，服务器看到的就只是一个 IP，域名规则不会命中，但可以用 IP/CIDR 规则来屏蔽。
 
 服务器还会记录每个用户最近访问过的域名/IP（自动去重，按最后访问时间排序，最多保留 50 条，同时记录访问时所用的客户端 IP），可用于审查用户的访问目标与来源、辅助决定要屏蔽哪些域名。同样仅对客户端以域名/IP 方式发起的 TCP 连接生效（UDP-over-TCP 的真实目标在这一层不可见，不计入记录）；记录每 10 秒批量落库一次，进程异常退出（未走 `systemctl stop` 正常关闭）时可能丢失最近 10 秒内的新记录。
 
@@ -139,8 +139,8 @@ sudo bash uninstall.sh --purge  # 同时清除用户数据库、凭据与系统�
 | `PUT /api/users/{id}` | 部分更新用户字段 |
 | `DELETE /api/users/{id}` | 删除用户 |
 | `POST /api/users/{id}/reset-traffic` | 手动重置该用户已用流量 |
-| `GET /api/users/{id}/blocked-domains` | 查看该用户屏蔽的域名/泛域名列表 |
-| `POST /api/users/{id}/blocked-domains` | 新增一条屏蔽规则，字段：`pattern`（如 `example.com` 或 `*.example.com`） |
+| `GET /api/users/{id}/blocked-domains` | 查看该用户的屏蔽规则列表（域名/泛域名/IP/CIDR 混合） |
+| `POST /api/users/{id}/blocked-domains` | 新增一条屏蔽规则，字段：`pattern`（`example.com`、`*.example.com`、`203.0.113.1` 或 `10.0.0.0/8`） |
 | `DELETE /api/users/{id}/blocked-domains` | 移除一条屏蔽规则，字段同上（用请求体传 `pattern`，而非拼在路径里） |
 | `GET /api/users/{id}/visit-history` | 查看该用户最近访问的去重域名/IP 列表（含最后访问时间与访问时所用的客户端 IP，按时间倒序） |
 | `DELETE /api/users/{id}/visit-history` | 清空该用户的访问记录 |

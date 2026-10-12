@@ -260,13 +260,13 @@
       <input id="f_expires" type="date">
     </div>
     <div class="field" id="domainBlockSection" style="display:none;">
-      <label>屏蔽域名 / 泛域名</label>
+      <label>屏蔽域名 / 泛域名 / IP / CIDR</label>
       <div id="domainList" class="chip-list"></div>
       <div style="display:flex;gap:6px;">
-        <input id="f_domain_new" placeholder="example.com 或 *.example.com" style="flex:1;">
+        <input id="f_domain_new" placeholder="example.com、*.example.com、203.0.113.1 或 10.0.0.0/8" style="flex:1;">
         <button type="button" class="small" id="addDomainBtn">添加</button>
       </div>
-      <p class="hint" style="margin-top:6px;margin-bottom:0;">泛域名（如 *.example.com）屏蔽所有子域名，但不含裸域名本身；仅对客户端以域名方式发起的连接生效</p>
+      <p class="hint" style="margin-top:6px;margin-bottom:0;">泛域名（如 *.example.com）屏蔽所有子域名，但不含裸域名本身；域名规则仅对客户端以域名方式发起的连接生效，IP/CIDR 规则仅对客户端以 IP 方式发起的连接生效</p>
     </div>
     <div class="dialog-actions">
       <button type="button" id="cancelBtn">取消</button>

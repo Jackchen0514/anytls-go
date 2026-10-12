@@ -337,13 +337,15 @@ type blockedDomainRequest struct {
 	Pattern string `json:"pattern"`
 }
 
-// handleBlockedDomains manages a single user's domain blocklist:
+// handleBlockedDomains manages a single user's blocklist (domains,
+// wildcard domains, exact IPs, and CIDR ranges):
 //
 //	GET    -> list current patterns
-//	POST   -> add one, body {"pattern": "example.com" | "*.example.com"}
+//	POST   -> add one, body {"pattern": "example.com" | "*.example.com" |
+//	          "203.0.113.1" | "10.0.0.0/8"}
 //	DELETE -> remove one, same body shape (DELETE-with-body rather than a
-//	          path segment, since "*" in a URL path is awkward to round-trip
-//	          reliably across HTTP clients)
+//	          path segment, since "*" and "/" in a URL path are awkward to
+//	          round-trip reliably across HTTP clients)
 func (s *Server) handleBlockedDomains(w http.ResponseWriter, r *http.Request, id int64) {
 	switch r.Method {
 	case http.MethodGet:
@@ -360,11 +362,11 @@ func (s *Server) handleBlockedDomains(w http.ResponseWriter, r *http.Request, id
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
-		pattern := user.NormalizeDomainPattern(req.Pattern)
+		pattern := user.NormalizeBlockPattern(req.Pattern)
 
 		if r.Method == http.MethodPost {
-			if !user.ValidDomainPattern(pattern) {
-				writeError(w, http.StatusBadRequest, "pattern must be a domain like example.com or a wildcard like *.example.com")
+			if !user.ValidBlockPattern(pattern) {
+				writeError(w, http.StatusBadRequest, "pattern must be a domain (example.com), a wildcard (*.example.com), an IP (203.0.113.1), or a CIDR range (10.0.0.0/8)")
 				return
 			}
 			if err := s.manager.AddBlockedDomain(id, pattern); err != nil {

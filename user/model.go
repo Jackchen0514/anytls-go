@@ -1,6 +1,7 @@
 package user
 
 import (
+	"net/netip"
 	"strings"
 	"time"
 )
@@ -33,9 +34,12 @@ type User struct {
 	ExpiresAt         time.Time  `json:"expires_at"`
 	CreatedAt         time.Time  `json:"created_at"`
 	UpdatedAt         time.Time  `json:"updated_at"`
-	// BlockedDomains is populated from a separate table (see Store), not a
-	// column on this row - it's nil unless the caller explicitly loaded it
-	// (Manager.GetUser/ListUsers do; Store.GetUser/ListUsers alone do not).
+	// BlockedDomains holds this user's blocklist: each entry is a domain
+	// (example.com), a wildcard domain (*.example.com), an exact IP
+	// (203.0.113.1), or a CIDR range (10.0.0.0/8). Populated from a separate
+	// table (see Store), not a column on this row - it's nil unless the
+	// caller explicitly loaded it (Manager.GetUser/ListUsers do;
+	// Store.GetUser/ListUsers alone do not).
 	BlockedDomains []string `json:"blocked_domains,omitempty"`
 }
 
@@ -64,18 +68,29 @@ type Usage struct {
 	ConnLimit         int   `json:"conn_limit"`
 }
 
-// NormalizeDomainPattern lowercases a blocked-domain pattern and strips a
-// trailing dot, so "Example.com." and "example.com" are stored/matched the
-// same way.
-func NormalizeDomainPattern(p string) string {
+// NormalizeBlockPattern lowercases a blocklist pattern and strips a trailing
+// dot, so "Example.com." and "example.com" (or "2001:DB8::1" and
+// "2001:db8::1") are stored/matched the same way.
+func NormalizeBlockPattern(p string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(p), "."))
 }
 
-// ValidDomainPattern reports whether p (already normalized) is an acceptable
-// blocked-domain pattern: a plain domain (e.g. "example.com") or a single
-// leading wildcard label (e.g. "*.example.com", which matches any subdomain
-// but not example.com itself).
-func ValidDomainPattern(p string) bool {
+// ValidBlockPattern reports whether p (already normalized) is an acceptable
+// blocklist entry: a plain domain ("example.com"), a single leading
+// wildcard label ("*.example.com", matching any subdomain but not
+// example.com itself), an exact IP ("203.0.113.1"/"2001:db8::1"), or a CIDR
+// range ("10.0.0.0/8"/"2001:db8::/32").
+func ValidBlockPattern(p string) bool {
+	if _, err := netip.ParseAddr(p); err == nil {
+		return true
+	}
+	if _, err := netip.ParsePrefix(p); err == nil {
+		return true
+	}
+	return validDomainShape(p)
+}
+
+func validDomainShape(p string) bool {
 	base := strings.TrimPrefix(p, "*.")
 	if base == p && strings.Contains(p, "*") {
 		return false // "*" anywhere but as a "*." prefix
@@ -97,13 +112,30 @@ func ValidDomainPattern(p string) bool {
 // like "example.com" matches only that exact host; a pattern prefixed with
 // "*." (e.g. "*.example.com") matches any subdomain of example.com, but not
 // example.com itself. Both host and pattern are normalized before comparing.
+// An IP/CIDR pattern never matches here (it can't equal or suffix-match a
+// domain name) - see matchesIPPattern for those.
 func matchesDomainPattern(host, pattern string) bool {
-	host = NormalizeDomainPattern(host)
-	pattern = NormalizeDomainPattern(pattern)
+	host = NormalizeBlockPattern(host)
+	pattern = NormalizeBlockPattern(pattern)
 	if suffix, ok := strings.CutPrefix(pattern, "*."); ok {
 		return strings.HasSuffix(host, "."+suffix)
 	}
 	return host == pattern
+}
+
+// matchesIPPattern reports whether addr matches pattern, which may be an
+// exact IP or a CIDR range. A non-IP/CIDR pattern (a domain/wildcard entry)
+// never matches here.
+func matchesIPPattern(addr netip.Addr, pattern string) bool {
+	pattern = NormalizeBlockPattern(pattern)
+	addr = addr.Unmap()
+	if prefix, err := netip.ParsePrefix(pattern); err == nil {
+		return prefix.Contains(addr)
+	}
+	if ip, err := netip.ParseAddr(pattern); err == nil {
+		return ip.Unmap() == addr
+	}
+	return false
 }
 
 func nextResetAt(from time.Time, cycle ResetCycle) time.Time {

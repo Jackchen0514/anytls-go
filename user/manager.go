@@ -3,6 +3,7 @@ package user
 import (
 	"crypto/sha256"
 	"math"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -237,13 +238,28 @@ func (st *State) IsExpired() bool {
 	return !st.user.ExpiresAt.IsZero() && !time.Now().Before(st.user.ExpiresAt)
 }
 
-// IsDomainBlocked reports whether host matches any of the user's
-// blocked-domain patterns (see matchesDomainPattern).
+// IsDomainBlocked reports whether host matches any of the user's blocklist
+// patterns that are domains/wildcards (see matchesDomainPattern). Use
+// IsIPBlocked for IP-destination connections instead.
 func (st *State) IsDomainBlocked(host string) bool {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	for _, p := range st.user.BlockedDomains {
 		if matchesDomainPattern(host, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsIPBlocked reports whether addr matches any of the user's blocklist
+// patterns that are an exact IP or a CIDR range (see matchesIPPattern). Use
+// IsDomainBlocked for FQDN-destination connections instead.
+func (st *State) IsIPBlocked(addr netip.Addr) bool {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	for _, p := range st.user.BlockedDomains {
+		if matchesIPPattern(addr, p) {
 			return true
 		}
 	}
