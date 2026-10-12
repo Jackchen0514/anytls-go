@@ -22,6 +22,9 @@ type State struct {
 	usedDelta   int64 // bytes transferred since the last DB flush, not yet added to user.TrafficUsedBytes
 	activeIPs   map[string]int
 	activeConns int
+
+	visits      []VisitRecord // most-recent-first, deduplicated, capped at MaxVisitHistory
+	visitsDirty bool          // true if visits changed since the last DB flush
 }
 
 func (st *State) Usage() Usage {
@@ -98,6 +101,18 @@ func (m *Manager) reload() error {
 		st, exists := m.byID[u.ID]
 		if !exists {
 			st = &State{activeIPs: make(map[string]int)}
+			// Visits live only in memory between flushes (like activeIPs/
+			// activeConns), so only seed from the DB once, when the state is
+			// first created - not on every reload, which would otherwise
+			// stomp on not-yet-flushed in-memory visits with stale DB data.
+			if history, err := m.store.ListVisitHistory(u.ID); err != nil {
+				logrus.Errorln("[user] load visit history:", err)
+			} else {
+				if len(history) > MaxVisitHistory {
+					history = history[:MaxVisitHistory]
+				}
+				st.visits = history
+			}
 		}
 		st.mu.Lock()
 		st.user = u
@@ -145,12 +160,22 @@ func (m *Manager) flushAll() {
 			st.usedDelta = 0
 			st.user.TrafficUsedBytes += delta
 		}
+		var visitsSnapshot []VisitRecord
+		if st.visitsDirty {
+			visitsSnapshot = append([]VisitRecord(nil), st.visits...)
+			st.visitsDirty = false
+		}
 		id := st.user.ID
 		st.mu.Unlock()
 
 		if delta != 0 {
 			if err := m.store.AddTrafficUsed(id, delta); err != nil {
 				logrus.Errorln("[user] flush traffic:", err)
+			}
+		}
+		if visitsSnapshot != nil {
+			if err := m.store.ReplaceVisitHistory(id, visitsSnapshot); err != nil {
+				logrus.Errorln("[user] flush visit history:", err)
 			}
 		}
 	}
@@ -223,6 +248,41 @@ func (st *State) IsDomainBlocked(host string) bool {
 		}
 	}
 	return false
+}
+
+// RecordVisit notes that host (a domain or IP, deduplicated as-is) was just
+// proxied to, moving it to the front of the user's recent-visit list and
+// capping the list at MaxVisitHistory. Purely in-memory; Manager's flush
+// loop persists it periodically.
+func (st *State) RecordVisit(host string) {
+	if host == "" {
+		return
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	now := time.Now()
+	for i, v := range st.visits {
+		if v.Host == host {
+			copy(st.visits[1:i+1], st.visits[:i])
+			st.visits[0] = VisitRecord{Host: host, LastVisitAt: now}
+			st.visitsDirty = true
+			return
+		}
+	}
+	st.visits = append([]VisitRecord{{Host: host, LastVisitAt: now}}, st.visits...)
+	if len(st.visits) > MaxVisitHistory {
+		st.visits = st.visits[:MaxVisitHistory]
+	}
+	st.visitsDirty = true
+}
+
+// VisitHistory returns a copy of the user's recent-visit list, most-recent first.
+func (st *State) VisitHistory() []VisitRecord {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	out := make([]VisitRecord, len(st.visits))
+	copy(out, st.visits)
+	return out
 }
 
 // AcquireIP registers ip as active for this user, enforcing IPLimit (0 = unlimited).
@@ -418,6 +478,39 @@ func (m *Manager) GetUsage(id int64) (Usage, bool) {
 		return Usage{}, false
 	}
 	return st.Usage(), true
+}
+
+// GetVisitHistory returns a live snapshot of a user's recent-visit list
+// (most-recent first), including entries not yet flushed to the DB.
+func (m *Manager) GetVisitHistory(id int64) ([]VisitRecord, bool) {
+	m.mu.RLock()
+	st, ok := m.byID[id]
+	m.mu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	return st.VisitHistory(), true
+}
+
+// ClearVisitHistory wipes a user's recorded visit history, immediately
+// (unlike per-connection RecordVisit, which only flushes periodically).
+func (m *Manager) ClearVisitHistory(id int64) error {
+	if _, err := m.store.GetUser(id); err != nil {
+		return err
+	}
+	if err := m.store.ReplaceVisitHistory(id, nil); err != nil {
+		return err
+	}
+	m.mu.RLock()
+	st, ok := m.byID[id]
+	m.mu.RUnlock()
+	if ok {
+		st.mu.Lock()
+		st.visits = nil
+		st.visitsDirty = false
+		st.mu.Unlock()
+	}
+	return nil
 }
 
 // UserCount returns the number of users currently loaded (used to decide

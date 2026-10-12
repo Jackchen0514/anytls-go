@@ -73,6 +73,17 @@ CREATE TABLE IF NOT EXISTS user_blocked_domains (
 		return nil, err
 	}
 
+	if _, err := db.Exec(`
+CREATE TABLE IF NOT EXISTS user_visit_history (
+	user_id INTEGER NOT NULL,
+	host TEXT NOT NULL,
+	last_visit_at TIMESTAMP NOT NULL,
+	PRIMARY KEY (user_id, host)
+)`); err != nil {
+		db.Close()
+		return nil, err
+	}
+
 	return &Store{db: db}, nil
 }
 
@@ -192,9 +203,13 @@ func (s *Store) UpdateUser(u *User) error {
 }
 
 func (s *Store) DeleteUser(id int64) error {
-	// No foreign key enforcement is set up on user_blocked_domains, so clean
-	// it up explicitly rather than leaving orphaned rows behind.
+	// No foreign key enforcement is set up on user_blocked_domains/
+	// user_visit_history, so clean them up explicitly rather than leaving
+	// orphaned rows behind.
 	if _, err := s.db.Exec(`DELETE FROM user_blocked_domains WHERE user_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`DELETE FROM user_visit_history WHERE user_id = ?`, id); err != nil {
 		return err
 	}
 	res, err := s.db.Exec(`DELETE FROM users WHERE id = ?`, id)
@@ -266,6 +281,50 @@ func (s *Store) AddBlockedDomain(userID int64, pattern string) error {
 func (s *Store) RemoveBlockedDomain(userID int64, pattern string) error {
 	_, err := s.db.Exec(`DELETE FROM user_blocked_domains WHERE user_id = ? AND pattern = ?`, userID, pattern)
 	return err
+}
+
+// ListVisitHistory returns a user's recorded visit history, most-recent
+// first.
+func (s *Store) ListVisitHistory(userID int64) ([]VisitRecord, error) {
+	rows, err := s.db.Query(`SELECT host, last_visit_at FROM user_visit_history WHERE user_id = ? ORDER BY last_visit_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var history []VisitRecord
+	for rows.Next() {
+		var v VisitRecord
+		if err := rows.Scan(&v.Host, &v.LastVisitAt); err != nil {
+			return nil, err
+		}
+		history = append(history, v)
+	}
+	return history, rows.Err()
+}
+
+// ReplaceVisitHistory atomically overwrites a user's whole visit history
+// with entries (expected already deduplicated and capped by the caller).
+// Called periodically by Manager's flush loop rather than per-connection, so
+// a full delete+reinsert here is simpler than diffing and cheap enough given
+// the small capped size.
+func (s *Store) ReplaceVisitHistory(userID int64, entries []VisitRecord) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM user_visit_history WHERE user_id = ?`, userID); err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if _, err := tx.Exec(`INSERT INTO user_visit_history (user_id, host, last_visit_at) VALUES (?, ?, ?)`,
+			userID, e.Host, e.LastVisitAt); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // AddTrafficUsed atomically adds delta to the stored usage counter.

@@ -39,6 +39,17 @@ type User struct {
 	BlockedDomains []string `json:"blocked_domains,omitempty"`
 }
 
+// VisitRecord is one deduplicated entry in a user's recent visit history:
+// the most recent time a given host (domain or IP) was proxied to.
+type VisitRecord struct {
+	Host        string    `json:"host"`
+	LastVisitAt time.Time `json:"last_visit_at"`
+}
+
+// MaxVisitHistory caps how many distinct hosts are kept per user - oldest
+// (by last visit) are dropped once this is exceeded.
+const MaxVisitHistory = 50
+
 // Usage is a point-in-time snapshot of a user's live resource consumption.
 type Usage struct {
 	UserID            int64 `json:"user_id"`

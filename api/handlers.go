@@ -208,6 +208,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 //	GET/PUT/DELETE          /api/users/{id}
 //	POST                    /api/users/{id}/reset-traffic
 //	GET/POST/DELETE (body)  /api/users/{id}/blocked-domains
+//	GET/DELETE              /api/users/{id}/visit-history
 func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/users/")
 	parts := strings.Split(strings.Trim(rest, "/"), "/")
@@ -241,6 +242,11 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 
 	if len(parts) == 2 && parts[1] == "blocked-domains" {
 		s.handleBlockedDomains(w, r, id)
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "visit-history" {
+		s.handleVisitHistory(w, r, id)
 		return
 	}
 
@@ -378,6 +384,33 @@ func (s *Server) handleBlockedDomains(w http.ResponseWriter, r *http.Request, id
 			return
 		}
 		writeJSON(w, http.StatusOK, s.view(u))
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+// handleVisitHistory manages a single user's recent-visit history (recent
+// deduplicated domains/IPs they've been proxied to):
+//
+//	GET    -> list entries {host, last_visit_at}, most-recent first
+//	DELETE -> clear history
+func (s *Server) handleVisitHistory(w http.ResponseWriter, r *http.Request, id int64) {
+	switch r.Method {
+	case http.MethodGet:
+		history, ok := s.manager.GetVisitHistory(id)
+		if !ok {
+			writeError(w, http.StatusNotFound, "user not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, history)
+
+	case http.MethodDelete:
+		if err := s.manager.ClearVisitHistory(id); err != nil {
+			respondStoreErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")

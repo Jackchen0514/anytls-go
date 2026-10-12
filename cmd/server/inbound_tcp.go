@@ -118,9 +118,17 @@ func handleTcpConnection(ctx context.Context, c net.Conn, s *myServer) {
 			return
 		}
 
+		isUoT := strings.Contains(destination.String(), "udp-over-tcp.arpa")
+		if !isUoT {
+			// The UoT placeholder destination above isn't a real site - the
+			// actual per-packet UDP targets aren't visible at this layer, so
+			// only record visits for genuine TCP destinations.
+			userState.RecordVisit(destination.AddrString())
+		}
+
 		conn := &countingConn{Stream: stream, state: userState}
 
-		if strings.Contains(destination.String(), "udp-over-tcp.arpa") {
+		if isUoT {
 			proxyOutboundUoT(ctx, conn, destination)
 		} else {
 			proxyOutboundTCP(ctx, conn, destination)
