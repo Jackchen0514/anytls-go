@@ -123,7 +123,7 @@ func handleTcpConnection(ctx context.Context, c net.Conn, s *myServer) {
 			// The UoT placeholder destination above isn't a real site - the
 			// actual per-packet UDP targets aren't visible at this layer, so
 			// only record visits for genuine TCP destinations.
-			userState.RecordVisit(destination.AddrString())
+			userState.RecordVisit(destination.AddrString(), remoteIP)
 		}
 
 		conn := &countingConn{Stream: stream, state: userState}

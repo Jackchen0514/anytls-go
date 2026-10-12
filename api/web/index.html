@@ -297,7 +297,7 @@
 <dialog id="historyDialog" style="width:min(460px, 92vw);">
   <div class="dialog-inner">
     <h2 id="historyTitle">访问记录</h2>
-    <p class="hint" style="margin-top:-8px;">最近访问过的域名/IP，自动去重，仅保留最近 50 条；仅记录客户端以域名方式发起的 TCP 连接目标</p>
+    <p class="hint" style="margin-top:-8px;">最近访问过的域名/IP，自动去重，仅保留最近 50 条，并显示访问时所用的客户端 IP；仅记录客户端以域名方式发起的 TCP 连接目标</p>
     <div id="historyList" style="max-height:50vh;overflow-y:auto;"></div>
     <div class="dialog-actions">
       <button type="button" class="danger" id="historyClearBtn">清空</button>
@@ -643,7 +643,7 @@ function renderHistoryList(entries) {
     row.innerHTML = `
       <div>
         <div class="host">${escapeHtml(e.host)}</div>
-        <div class="meta">${fmtVisitTime(e.last_visit_at)}</div>
+        <div class="meta">${fmtVisitTime(e.last_visit_at)}${e.client_ip ? ' · 来自 ' + escapeHtml(e.client_ip) : ''}</div>
       </div>
       <button type="button" class="small" title="将该域名/IP 加入屏蔽列表">屏蔽</button>`;
     row.querySelector('button').onclick = () => quickBlockFromHistory(e.host);

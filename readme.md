@@ -127,7 +127,7 @@ sudo bash uninstall.sh --purge  # 同时清除用户数据库、凭据与系统�
 
 每个用户还可设置屏蔽的域名/泛域名（如 `example.com` 或 `*.example.com`，泛域名屏蔽所有子域名但不含裸域名本身），命中屏蔽规则的代理流会被直接拒绝。该功能仅对客户端以域名方式发起的连接生效（SOCKS5 的 `Fqdn` 地址类型）——若客户端自行把域名解析为 IP 后再连接，服务器拿到的就只是一个 IP，无法按域名匹配屏蔽。
 
-服务器还会记录每个用户最近访问过的域名/IP（自动去重，按最后访问时间排序，最多保留 50 条），可用于审查用户的访问目标、辅助决定要屏蔽哪些域名。同样仅对客户端以域名/IP 方式发起的 TCP 连接生效（UDP-over-TCP 的真实目标在这一层不可见，不计入记录）；记录每 10 秒批量落库一次，进程异常退出（未走 `systemctl stop` 正常关闭）时可能丢失最近 10 秒内的新记录。
+服务器还会记录每个用户最近访问过的域名/IP（自动去重，按最后访问时间排序，最多保留 50 条，同时记录访问时所用的客户端 IP），可用于审查用户的访问目标与来源、辅助决定要屏蔽哪些域名。同样仅对客户端以域名/IP 方式发起的 TCP 连接生效（UDP-over-TCP 的真实目标在这一层不可见，不计入记录）；记录每 10 秒批量落库一次，进程异常退出（未走 `systemctl stop` 正常关闭）时可能丢失最近 10 秒内的新记录。
 
 管理 API（JSON）：
 
@@ -142,7 +142,7 @@ sudo bash uninstall.sh --purge  # 同时清除用户数据库、凭据与系统�
 | `GET /api/users/{id}/blocked-domains` | 查看该用户屏蔽的域名/泛域名列表 |
 | `POST /api/users/{id}/blocked-domains` | 新增一条屏蔽规则，字段：`pattern`（如 `example.com` 或 `*.example.com`） |
 | `DELETE /api/users/{id}/blocked-domains` | 移除一条屏蔽规则，字段同上（用请求体传 `pattern`，而非拼在路径里） |
-| `GET /api/users/{id}/visit-history` | 查看该用户最近访问的去重域名/IP 列表（含最后访问时间，按时间倒序） |
+| `GET /api/users/{id}/visit-history` | 查看该用户最近访问的去重域名/IP 列表（含最后访问时间与访问时所用的客户端 IP，按时间倒序） |
 | `DELETE /api/users/{id}/visit-history` | 清空该用户的访问记录 |
 | `GET /api/version` | 查看当前运行版本号，并尝试对比 GitHub 上的最新 release（网络不通时该项静默失败，不影响返回当前版本号） |
 

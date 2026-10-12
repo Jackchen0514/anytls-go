@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS user_blocked_domains (
 CREATE TABLE IF NOT EXISTS user_visit_history (
 	user_id INTEGER NOT NULL,
 	host TEXT NOT NULL,
+	client_ip TEXT NOT NULL DEFAULT '',
 	last_visit_at TIMESTAMP NOT NULL,
 	PRIMARY KEY (user_id, host)
 )`); err != nil {
@@ -286,7 +287,7 @@ func (s *Store) RemoveBlockedDomain(userID int64, pattern string) error {
 // ListVisitHistory returns a user's recorded visit history, most-recent
 // first.
 func (s *Store) ListVisitHistory(userID int64) ([]VisitRecord, error) {
-	rows, err := s.db.Query(`SELECT host, last_visit_at FROM user_visit_history WHERE user_id = ? ORDER BY last_visit_at DESC`, userID)
+	rows, err := s.db.Query(`SELECT host, client_ip, last_visit_at FROM user_visit_history WHERE user_id = ? ORDER BY last_visit_at DESC`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -295,7 +296,7 @@ func (s *Store) ListVisitHistory(userID int64) ([]VisitRecord, error) {
 	var history []VisitRecord
 	for rows.Next() {
 		var v VisitRecord
-		if err := rows.Scan(&v.Host, &v.LastVisitAt); err != nil {
+		if err := rows.Scan(&v.Host, &v.ClientIP, &v.LastVisitAt); err != nil {
 			return nil, err
 		}
 		history = append(history, v)
@@ -319,8 +320,8 @@ func (s *Store) ReplaceVisitHistory(userID int64, entries []VisitRecord) error {
 		return err
 	}
 	for _, e := range entries {
-		if _, err := tx.Exec(`INSERT INTO user_visit_history (user_id, host, last_visit_at) VALUES (?, ?, ?)`,
-			userID, e.Host, e.LastVisitAt); err != nil {
+		if _, err := tx.Exec(`INSERT INTO user_visit_history (user_id, host, client_ip, last_visit_at) VALUES (?, ?, ?, ?)`,
+			userID, e.Host, e.ClientIP, e.LastVisitAt); err != nil {
 			return err
 		}
 	}

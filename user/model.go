@@ -40,9 +40,12 @@ type User struct {
 }
 
 // VisitRecord is one deduplicated entry in a user's recent visit history:
-// the most recent time a given host (domain or IP) was proxied to.
+// the most recent time a given destination host (domain or IP) was proxied
+// to, and the client IP that made that most recent request (so e.g. a
+// multi-device account can be traced back to which device visited what).
 type VisitRecord struct {
 	Host        string    `json:"host"`
+	ClientIP    string    `json:"client_ip"`
 	LastVisitAt time.Time `json:"last_visit_at"`
 }
 

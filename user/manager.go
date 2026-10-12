@@ -251,10 +251,11 @@ func (st *State) IsDomainBlocked(host string) bool {
 }
 
 // RecordVisit notes that host (a domain or IP, deduplicated as-is) was just
-// proxied to, moving it to the front of the user's recent-visit list and
-// capping the list at MaxVisitHistory. Purely in-memory; Manager's flush
-// loop persists it periodically.
-func (st *State) RecordVisit(host string) {
+// proxied to from clientIP, moving it to the front of the user's
+// recent-visit list (refreshing its clientIP/timestamp if already present)
+// and capping the list at MaxVisitHistory. Purely in-memory; Manager's
+// flush loop persists it periodically.
+func (st *State) RecordVisit(host, clientIP string) {
 	if host == "" {
 		return
 	}
@@ -264,12 +265,12 @@ func (st *State) RecordVisit(host string) {
 	for i, v := range st.visits {
 		if v.Host == host {
 			copy(st.visits[1:i+1], st.visits[:i])
-			st.visits[0] = VisitRecord{Host: host, LastVisitAt: now}
+			st.visits[0] = VisitRecord{Host: host, ClientIP: clientIP, LastVisitAt: now}
 			st.visitsDirty = true
 			return
 		}
 	}
-	st.visits = append([]VisitRecord{{Host: host, LastVisitAt: now}}, st.visits...)
+	st.visits = append([]VisitRecord{{Host: host, ClientIP: clientIP, LastVisitAt: now}}, st.visits...)
 	if len(st.visits) > MaxVisitHistory {
 		st.visits = st.visits[:MaxVisitHistory]
 	}
