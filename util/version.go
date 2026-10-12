@@ -2,6 +2,6 @@ package util
 
 // ProgramVersion is the release version number, kept in sync with the git
 // tag (vX.Y.Z) and GitHub release of the same name.
-const ProgramVersion = "0.0.34"
+const ProgramVersion = "0.0.35"
 
 var ProgramVersionName = "anytls/" + ProgramVersion
