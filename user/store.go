@@ -62,6 +62,17 @@ CREATE TABLE IF NOT EXISTS users (
 		}
 	}
 
+	if _, err := db.Exec(`
+CREATE TABLE IF NOT EXISTS user_blocked_domains (
+	user_id INTEGER NOT NULL,
+	pattern TEXT NOT NULL,
+	created_at TIMESTAMP NOT NULL,
+	PRIMARY KEY (user_id, pattern)
+)`); err != nil {
+		db.Close()
+		return nil, err
+	}
+
 	return &Store{db: db}, nil
 }
 
@@ -181,6 +192,11 @@ func (s *Store) UpdateUser(u *User) error {
 }
 
 func (s *Store) DeleteUser(id int64) error {
+	// No foreign key enforcement is set up on user_blocked_domains, so clean
+	// it up explicitly rather than leaving orphaned rows behind.
+	if _, err := s.db.Exec(`DELETE FROM user_blocked_domains WHERE user_id = ?`, id); err != nil {
+		return err
+	}
 	res, err := s.db.Exec(`DELETE FROM users WHERE id = ?`, id)
 	if err != nil {
 		return err
@@ -193,6 +209,63 @@ func (s *Store) DeleteUser(id int64) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// ListBlockedDomains returns the domain/wildcard patterns blocked for a
+// single user, sorted for stable output.
+func (s *Store) ListBlockedDomains(userID int64) ([]string, error) {
+	rows, err := s.db.Query(`SELECT pattern FROM user_blocked_domains WHERE user_id = ? ORDER BY pattern`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var patterns []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		patterns = append(patterns, p)
+	}
+	return patterns, rows.Err()
+}
+
+// ListAllBlockedDomains batch-loads every user's blocked patterns in one
+// query, keyed by user ID, for Manager.reload() to avoid an N+1 query per
+// reload.
+func (s *Store) ListAllBlockedDomains() (map[int64][]string, error) {
+	rows, err := s.db.Query(`SELECT user_id, pattern FROM user_blocked_domains ORDER BY user_id, pattern`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[int64][]string)
+	for rows.Next() {
+		var id int64
+		var p string
+		if err := rows.Scan(&id, &p); err != nil {
+			return nil, err
+		}
+		result[id] = append(result[id], p)
+	}
+	return result, rows.Err()
+}
+
+// AddBlockedDomain records a domain/wildcard pattern to block for a user.
+// Idempotent: adding the same pattern twice is a no-op.
+func (s *Store) AddBlockedDomain(userID int64, pattern string) error {
+	_, err := s.db.Exec(`INSERT OR IGNORE INTO user_blocked_domains (user_id, pattern, created_at) VALUES (?, ?, ?)`,
+		userID, pattern, time.Now())
+	return err
+}
+
+// RemoveBlockedDomain removes a previously-added pattern. Removing a pattern
+// that isn't present is a no-op, not an error.
+func (s *Store) RemoveBlockedDomain(userID int64, pattern string) error {
+	_, err := s.db.Exec(`DELETE FROM user_blocked_domains WHERE user_id = ? AND pattern = ?`, userID, pattern)
+	return err
 }
 
 // AddTrafficUsed atomically adds delta to the stored usage counter.

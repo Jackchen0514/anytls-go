@@ -109,6 +109,16 @@
   .check-field input { width: auto; }
   .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
   .hint { font-size: 11px; color: var(--muted); margin-top: -6px; margin-bottom: 12px; }
+  .chip-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .chip-list:empty::before { content: '暂无屏蔽域名'; font-size: 12px; color: var(--muted); }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+    color: var(--danger);
+    border-radius: 999px; padding: 3px 4px 3px 10px; font-size: 12px;
+  }
+  .chip .x { cursor: pointer; font-weight: 700; padding: 0 5px; border-radius: 50%; }
+  .chip .x:hover { background: color-mix(in srgb, var(--danger) 20%, transparent); }
   #toast {
     position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
     background: var(--text); color: var(--bg);
@@ -241,6 +251,15 @@
       <label>到期日期（留空 = 永不过期）</label>
       <input id="f_expires" type="date">
     </div>
+    <div class="field" id="domainBlockSection" style="display:none;">
+      <label>屏蔽域名 / 泛域名</label>
+      <div id="domainList" class="chip-list"></div>
+      <div style="display:flex;gap:6px;">
+        <input id="f_domain_new" placeholder="example.com 或 *.example.com" style="flex:1;">
+        <button type="button" class="small" id="addDomainBtn">添加</button>
+      </div>
+      <p class="hint" style="margin-top:6px;margin-bottom:0;">泛域名（如 *.example.com）屏蔽所有子域名，但不含裸域名本身；仅对客户端以域名方式发起的连接生效</p>
+    </div>
     <div class="dialog-actions">
       <button type="button" id="cancelBtn">取消</button>
       <button type="submit" class="primary" id="submitBtn">保存</button>
@@ -336,6 +355,7 @@ function countLabel(active, limit) {
 }
 
 let users = [];
+let editingUserId = null;
 
 async function loadUsers() {
   if (!getKey()) {
@@ -361,7 +381,7 @@ function render() {
     const usage = u.usage || {};
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td><strong>${escapeHtml(u.username)}</strong></td>
+      <td><strong>${escapeHtml(u.username)}</strong>${u.blocked_domains && u.blocked_domains.length ? ` <span class="muted" style="font-size:11px;" title="${escapeHtml(u.blocked_domains.join(', '))}">[屏蔽${u.blocked_domains.length}]</span>` : ''}</td>
       <td><span class="badge ${u.enabled ? 'on' : 'off'}">${u.enabled ? '启用' : '禁用'}</span></td>
       <td>${meter(usage.traffic_used_bytes || 0, u.traffic_limit_bytes || 0, u.traffic_multiplier)}</td>
       <td>${countLabel(usage.active_ips || 0, u.ip_limit || 0)}</td>
@@ -422,6 +442,7 @@ function escapeHtml(s) {
 }
 
 function openCreate() {
+  editingUserId = null;
   $('dialogTitle').textContent = '新建用户';
   $('f_id').value = '';
   $('f_username').value = '';
@@ -436,10 +457,12 @@ function openCreate() {
   $('f_conn').value = 0;
   $('f_reset').value = 'none';
   $('f_expires').value = '';
+  $('domainBlockSection').style.display = 'none';
   dialog.showModal();
 }
 
 function openEdit(u) {
+  editingUserId = u.id;
   $('dialogTitle').textContent = '编辑用户: ' + u.username;
   $('f_id').value = u.id;
   $('f_username').value = u.username;
@@ -454,8 +477,53 @@ function openEdit(u) {
   $('f_conn').value = u.conn_limit || 0;
   $('f_reset').value = u.traffic_reset_cycle || 'none';
   $('f_expires').value = isoToDateInput(u.expires_at);
+  $('domainBlockSection').style.display = 'block';
+  $('f_domain_new').value = '';
+  renderDomainList(u.blocked_domains || []);
   dialog.showModal();
 }
+
+function renderDomainList(patterns) {
+  const el = $('domainList');
+  el.innerHTML = '';
+  for (const p of patterns) {
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.innerHTML = `${escapeHtml(p)} <span class="x" title="移除">×</span>`;
+    chip.querySelector('.x').onclick = () => removeBlockedDomain(p);
+    el.appendChild(chip);
+  }
+}
+
+async function addBlockedDomain() {
+  if (!editingUserId) return;
+  const pattern = $('f_domain_new').value.trim();
+  if (!pattern) return;
+  try {
+    const u = await api('/api/users/' + editingUserId + '/blocked-domains', {method: 'POST', body: JSON.stringify({pattern})});
+    $('f_domain_new').value = '';
+    renderDomainList(u.blocked_domains || []);
+    loadUsers();
+  } catch (e) {
+    if (e.message !== 'unauthorized') toast('添加失败: ' + e.message, true);
+  }
+}
+
+async function removeBlockedDomain(pattern) {
+  if (!editingUserId) return;
+  try {
+    const u = await api('/api/users/' + editingUserId + '/blocked-domains', {method: 'DELETE', body: JSON.stringify({pattern})});
+    renderDomainList(u.blocked_domains || []);
+    loadUsers();
+  } catch (e) {
+    if (e.message !== 'unauthorized') toast('移除失败: ' + e.message, true);
+  }
+}
+
+$('addDomainBtn').onclick = addBlockedDomain;
+$('f_domain_new').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); addBlockedDomain(); }
+});
 
 // --- Subscription QR code ---
 

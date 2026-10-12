@@ -205,8 +205,9 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 
 // handleUserByID routes:
 //
-//	GET/PUT/DELETE /api/users/{id}
-//	POST           /api/users/{id}/reset-traffic
+//	GET/PUT/DELETE          /api/users/{id}
+//	POST                    /api/users/{id}/reset-traffic
+//	GET/POST/DELETE (body)  /api/users/{id}/blocked-domains
 func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/users/")
 	parts := strings.Split(strings.Trim(rest, "/"), "/")
@@ -237,6 +238,12 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.view(u))
 		return
 	}
+
+	if len(parts) == 2 && parts[1] == "blocked-domains" {
+		s.handleBlockedDomains(w, r, id)
+		return
+	}
+
 	if len(parts) != 1 {
 		writeError(w, http.StatusNotFound, "not found")
 		return
@@ -314,6 +321,63 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+type blockedDomainRequest struct {
+	Pattern string `json:"pattern"`
+}
+
+// handleBlockedDomains manages a single user's domain blocklist:
+//
+//	GET    -> list current patterns
+//	POST   -> add one, body {"pattern": "example.com" | "*.example.com"}
+//	DELETE -> remove one, same body shape (DELETE-with-body rather than a
+//	          path segment, since "*" in a URL path is awkward to round-trip
+//	          reliably across HTTP clients)
+func (s *Server) handleBlockedDomains(w http.ResponseWriter, r *http.Request, id int64) {
+	switch r.Method {
+	case http.MethodGet:
+		patterns, err := s.manager.ListBlockedDomains(id)
+		if err != nil {
+			respondStoreErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, patterns)
+
+	case http.MethodPost, http.MethodDelete:
+		var req blockedDomainRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		pattern := user.NormalizeDomainPattern(req.Pattern)
+
+		if r.Method == http.MethodPost {
+			if !user.ValidDomainPattern(pattern) {
+				writeError(w, http.StatusBadRequest, "pattern must be a domain like example.com or a wildcard like *.example.com")
+				return
+			}
+			if err := s.manager.AddBlockedDomain(id, pattern); err != nil {
+				respondStoreErr(w, err)
+				return
+			}
+		} else {
+			if err := s.manager.RemoveBlockedDomain(id, pattern); err != nil {
+				respondStoreErr(w, err)
+				return
+			}
+		}
+
+		u, err := s.manager.GetUser(id)
+		if err != nil {
+			respondStoreErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, s.view(u))
 
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")

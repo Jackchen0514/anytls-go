@@ -83,6 +83,10 @@ func (m *Manager) reload() error {
 	if err != nil {
 		return err
 	}
+	blockedDomains, err := m.store.ListAllBlockedDomains()
+	if err != nil {
+		return err
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -90,6 +94,7 @@ func (m *Manager) reload() error {
 	byID := make(map[int64]*State, len(users))
 	byPWHash := make(map[[32]byte]*State, len(users))
 	for _, u := range users {
+		u.BlockedDomains = blockedDomains[u.ID]
 		st, exists := m.byID[u.ID]
 		if !exists {
 			st = &State{activeIPs: make(map[string]int)}
@@ -207,6 +212,19 @@ func (st *State) IsExpired() bool {
 	return !st.user.ExpiresAt.IsZero() && !time.Now().Before(st.user.ExpiresAt)
 }
 
+// IsDomainBlocked reports whether host matches any of the user's
+// blocked-domain patterns (see matchesDomainPattern).
+func (st *State) IsDomainBlocked(host string) bool {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	for _, p := range st.user.BlockedDomains {
+		if matchesDomainPattern(host, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // AcquireIP registers ip as active for this user, enforcing IPLimit (0 = unlimited).
 // Returns false if the limit would be exceeded by a new distinct IP.
 func (st *State) AcquireIP(ip string) bool {
@@ -286,11 +304,30 @@ func (st *State) ID() int64 {
 // --- Admin operations (CRUD), delegated to Store and reflected in memory ---
 
 func (m *Manager) ListUsers() ([]*User, error) {
-	return m.store.ListUsers()
+	users, err := m.store.ListUsers()
+	if err != nil {
+		return nil, err
+	}
+	blockedDomains, err := m.store.ListAllBlockedDomains()
+	if err != nil {
+		return nil, err
+	}
+	for _, u := range users {
+		u.BlockedDomains = blockedDomains[u.ID]
+	}
+	return users, nil
 }
 
 func (m *Manager) GetUser(id int64) (*User, error) {
-	return m.store.GetUser(id)
+	u, err := m.store.GetUser(id)
+	if err != nil {
+		return nil, err
+	}
+	u.BlockedDomains, err = m.store.ListBlockedDomains(id)
+	if err != nil {
+		return nil, err
+	}
+	return u, nil
 }
 
 func (m *Manager) CreateUser(u *User) (*User, error) {
@@ -313,6 +350,37 @@ func (m *Manager) UpdateUser(u *User) error {
 
 func (m *Manager) DeleteUser(id int64) error {
 	if err := m.store.DeleteUser(id); err != nil {
+		return err
+	}
+	return m.reload()
+}
+
+// ListBlockedDomains returns a user's blocked domain/wildcard patterns.
+func (m *Manager) ListBlockedDomains(id int64) ([]string, error) {
+	if _, err := m.store.GetUser(id); err != nil {
+		return nil, err
+	}
+	return m.store.ListBlockedDomains(id)
+}
+
+// AddBlockedDomain adds pattern to a user's blocklist and makes it take
+// effect on already-open connections immediately (via reload).
+func (m *Manager) AddBlockedDomain(id int64, pattern string) error {
+	if _, err := m.store.GetUser(id); err != nil {
+		return err
+	}
+	if err := m.store.AddBlockedDomain(id, pattern); err != nil {
+		return err
+	}
+	return m.reload()
+}
+
+// RemoveBlockedDomain removes pattern from a user's blocklist.
+func (m *Manager) RemoveBlockedDomain(id int64, pattern string) error {
+	if _, err := m.store.GetUser(id); err != nil {
+		return err
+	}
+	if err := m.store.RemoveBlockedDomain(id, pattern); err != nil {
 		return err
 	}
 	return m.reload()

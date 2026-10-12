@@ -125,6 +125,8 @@ sudo bash uninstall.sh --purge  # 同时清除用户数据库、凭据与系统�
 
 用户超出流量/IP 数/连接数限制、或账号已到期后，服务器会拒绝其新建的流/连接（已限流的用户的存量会话中，新的代理流也会被立即拒绝，账号到期后已打开的会话也会在下一次读写时被主动断开）。
 
+每个用户还可设置屏蔽的域名/泛域名（如 `example.com` 或 `*.example.com`，泛域名屏蔽所有子域名但不含裸域名本身），命中屏蔽规则的代理流会被直接拒绝。该功能仅对客户端以域名方式发起的连接生效（SOCKS5 的 `Fqdn` 地址类型）——若客户端自行把域名解析为 IP 后再连接，服务器拿到的就只是一个 IP，无法按域名匹配屏蔽。
+
 管理 API（JSON）：
 
 | 方法与路径 | 说明 |
@@ -135,6 +137,9 @@ sudo bash uninstall.sh --purge  # 同时清除用户数据库、凭据与系统�
 | `PUT /api/users/{id}` | 部分更新用户字段 |
 | `DELETE /api/users/{id}` | 删除用户 |
 | `POST /api/users/{id}/reset-traffic` | 手动重置该用户已用流量 |
+| `GET /api/users/{id}/blocked-domains` | 查看该用户屏蔽的域名/泛域名列表 |
+| `POST /api/users/{id}/blocked-domains` | 新增一条屏蔽规则，字段：`pattern`（如 `example.com` 或 `*.example.com`） |
+| `DELETE /api/users/{id}/blocked-domains` | 移除一条屏蔽规则，字段同上（用请求体传 `pattern`，而非拼在路径里） |
 | `GET /api/version` | 查看当前运行版本号，并尝试对比 GitHub 上的最新 release（网络不通时该项静默失败，不影响返回当前版本号） |
 
 ### 示例客户端
